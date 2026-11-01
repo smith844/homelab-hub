@@ -90,7 +90,7 @@
               "text-halign": "center",
               "font-size": "14px",
               "font-weight": "400",
-              "font-family": "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
+              "font-family": "system-ui, -apple-system, Roboto, sans-serif",
               "font-style": "normal",
               "text-outline-width": 0,
               width: 48,
@@ -105,7 +105,7 @@
           },
           // Nodes with emoji icons - larger emoji only, no text, no italic
           {
-            selector: "node[icon]:not([imageIcon])",
+            selector: "node[icon]",
             style: {
               "font-size": "14px",
               "font-style": "normal",
