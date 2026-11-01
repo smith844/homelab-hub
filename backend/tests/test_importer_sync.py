@@ -8,6 +8,7 @@ from app.models import (
     ContainerGroupAssignment,
     ContainerGroupOverride,
     Hardware,
+    VM,
     db,
 )
 from app.services.folderview_import import (
@@ -289,3 +290,93 @@ def test_file_import_is_read_only(app, folder_fixture, tmp_path):
 
     assert report["dry_run"] is True
     assert source.read_bytes() == before
+
+
+def test_vm_hosted_containers_match_imported_assignments(app):
+    hardware = Hardware(name="Betty")
+    db.session.add(hardware)
+    db.session.flush()
+    docker_vm = VM(name="Docker", hardware_id=hardware.id)
+    db.session.add(docker_vm)
+    db.session.flush()
+    db.session.add(
+        AppService(
+            name="Home Lab Hub",
+            vm_id=docker_vm.id,
+            notes=(
+                "## Docker configuration\n"
+                "Collected: snapshot\n"
+                "Container: homelab-hub\n"
+                "Image: raidowl/homelab-hub:latest\n"
+            ),
+        )
+    )
+    db.session.add(
+        AppService(
+            name="Open-webui",
+            vm_id=docker_vm.id,
+            description="Docker container: open-webui",
+        )
+    )
+    db.session.add(AppService(name="Ungrouped Tool", vm_id=docker_vm.id))
+    db.session.commit()
+
+    data = {
+        "folder-tools": {
+            "name": "Tools",
+            "parentId": "",
+            "containers": ["homelab-hub", "open-webui"],
+            "regex": "",
+            "settings": {},
+            "actions": [],
+            "updatedAt": "2026-01-01T00:00:00Z",
+        }
+    }
+
+    dry = import_folderview(data, host_key="Betty", dry_run=True)
+
+    assert dry["host"]["matched"] == [{"kind": "hardware", "name": "Betty"}]
+    assert dry["unmatched_containers"] == []
+    assert dry["ungrouped_apps"] == ["ungrouped tool"]
+    assert db.session.query(ContainerGroup).count() == 0
+
+    report = import_folderview(data, host_key="Betty")
+
+    assert report["assignments"]["added"] == 2
+    assert effective_group(db.session, "betty", "homelab-hub").name == "Tools"
+    assert effective_group(db.session, "betty", "open-webui").name == "Tools"
+    # The non-Docker app is not in the folder and stays ungrouped.
+    assert effective_group(db.session, "betty", "ungrouped tool") is None
+
+
+def test_non_docker_notes_do_not_match_container_assignments(app):
+    hardware = Hardware(name="Betty")
+    db.session.add(hardware)
+    db.session.flush()
+    db.session.add(
+        AppService(
+            name="Home Assistant",
+            hardware_id=hardware.id,
+            notes="Container: home-assistant\nUnrelated documentation, not a Docker snapshot.",
+        )
+    )
+    db.session.commit()
+
+    data = {
+        "folder-x": {
+            "name": "Automation",
+            "parentId": "",
+            "containers": ["home-assistant"],
+            "regex": "",
+            "settings": {},
+            "actions": [],
+            "updatedAt": "2026-01-01T00:00:00Z",
+        }
+    }
+
+    report = import_folderview(data, host_key="Betty", dry_run=True)
+
+    # Without a Docker configuration marker, the container-like note line is not
+    # used; the app falls back to its display name and does not match.
+    assert report["unmatched_containers"] == ["home-assistant"]
+    assert report["ungrouped_apps"] == ["home assistant"]
