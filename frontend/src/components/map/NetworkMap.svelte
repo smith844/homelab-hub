@@ -6,12 +6,16 @@
   import { theme, readPreference, savePreference } from "../../lib/preferences.js";
 
   import { layoutPositions, layoutMissingPositions, validSavedPositions, ROW_GAP } from "../../lib/mapViews.js";
+  import { aggregateEdges, groupedLayoutPositions, layoutStorageKey } from "../../lib/grouping.js";
   export let graphData = null;
   export let viewKey = "all";
+  export let mode = "graph";
   const READABLE_ZOOM = 0.8;
   const VIEW_MARGIN = 60;
+  const GROUP_STATE_KEY = "hlh.mapGroupExpanded";
   let disposed = false;
   let resizeObserver;
+  let expandedGroups = new Set();
 
   let container;
   let cy;
@@ -23,10 +27,13 @@
   let tooltip = { visible: false, text: "", x: 0, y: 0 };
   
   $: if (cy) {
-    const textColor = $theme === "dark" ? "#e3ecf4" : "#25384a";
-    const mutedColor = $theme === "dark" ? "#a5b6c7" : "#637487";
+    const dark = $theme === "dark";
+    const textColor = dark ? "#e3ecf4" : "#25384a";
+    const mutedColor = dark ? "#a5b6c7" : "#637487";
     cy.nodes().forEach((n) => n.style("color", textColor));
     cy.edges().forEach((e) => e.style("color", mutedColor));
+    cy.nodes('[type="group"]').style("background-color", dark ? "#1f3a4d" : "#eef4f8");
+    cy.nodes('[type="group"]').style("border-color", dark ? "#74d2cb" : "#126e77");
   }
 
   async function loadNodeDetails(node) {
@@ -43,7 +50,12 @@
   }
 
   $: if (selectedNode) {
-    loadNodeDetails(selectedNode);
+    if (selectedNode.type === "group") {
+      selectedNodeDetails = null;
+      loadingDetails = false;
+    } else {
+      loadNodeDetails(selectedNode);
+    }
   } else {
     selectedNodeDetails = null;
     loadingDetails = false;
@@ -62,14 +74,19 @@
     try {
       const [graphRes, layoutRes, networksRes] = await Promise.all([
         graphData ? Promise.resolve(graphData) : get("/map/graph"),
-        Promise.resolve({data: readPreference(`hlh.mapLayout.${viewKey}`, {})}),
+        Promise.resolve({data: readPreference(layoutStorageKey(mode, viewKey), {})}),
         get("/map/networks"),
       ]);
 
       if (disposed) return;
+      const storedExpanded = readPreference(GROUP_STATE_KEY, []);
+      expandedGroups = new Set(
+        Array.isArray(storedExpanded) ? storedExpanded.filter((id) => typeof id === "string") : []
+      );
       // Only finite saved coordinates are applied or counted as saved.
       const savedPositions = validSavedPositions(layoutRes.data);
-      const missingPositions = layoutMissingPositions(graphRes, savedPositions);
+      const missingPositions = mode === "grouped" ? {} : layoutMissingPositions(graphRes, savedPositions);
+      const groupedPositions = mode === "grouped" ? groupedLayoutPositions(graphRes) : {};
       networks = networksRes.networks || [];
 
       // Apply saved positions; only nodes without one are placed automatically.
@@ -78,6 +95,8 @@
         if (saved) {
           n.position = { x: saved.x, y: saved.y };
           // Don't lock nodes - they should always be draggable
+        } else if (groupedPositions[n.data.id]) {
+          n.position = groupedPositions[n.data.id];
         } else if (missingPositions[n.data.id]) {
           n.position = missingPositions[n.data.id];
         }
@@ -179,6 +198,49 @@
               "z-index": -1,
             },
           },
+          {
+            selector: 'node[type="group"]',
+            style: {
+              shape: "round-rectangle",
+              width: 220,
+              height: 92,
+              "background-color": "#eef4f8",
+              "border-width": 2,
+              "border-color": "#126e77",
+              "font-size": "14px",
+              "font-weight": "600",
+              "text-valign": "center",
+              "text-halign": "center",
+              "text-wrap": "wrap",
+              "text-max-width": "190px",
+              "text-margin-y": 0,
+            },
+          },
+          {
+            selector: ".group-hidden",
+            style: {
+              display: "none",
+            },
+          },
+          {
+            selector: "edge.aggregate-edge",
+            style: {
+              width: 2,
+              "line-style": "dashed",
+              "line-color": "#9aa7b4",
+              "target-arrow-shape": "triangle",
+              "target-arrow-color": "#9aa7b4",
+              "curve-style": "bezier",
+              opacity: 0.75,
+              label: "",
+            },
+          },
+          {
+            selector: ".group-hidden-edge",
+            style: {
+              display: "none",
+            },
+          },
         ],
         layout: { name: "preset" }, // Use saved positions first
         minZoom: 0.1,
@@ -195,7 +257,10 @@
 
       // Only auto-layout when no node has a saved position.
       const hasSavedPositions = nodes.some((n) => savedPositions[n.data.id]);
-      if (!hasSavedPositions && nodes.length > 0) {
+      if (mode === "grouped") {
+        applyGroupState();
+        readableView();
+      } else if (!hasSavedPositions && nodes.length > 0) {
         runDagreLayout();
       } else if (hasSavedPositions) {
         readableView();
@@ -206,11 +271,17 @@
         debounceSaveLayout();
       });
 
-      // Show details on tap
+      // Show details on tap. Group cards also toggle expansion directly.
       cy.on("tap", "node", (evt) => {
         const node = evt.target;
         selectedNode = node.data();
-        applyEdgeHighlight(selectedNode.id);
+        if (node.data("type") === "group") {
+          toggleGroup(node);
+          selectedNode = { ...node.data() };
+          applyEdgeHighlight(node.id());
+        } else {
+          applyEdgeHighlight(selectedNode.id);
+        }
       });
 
       // Deselect when clicking background
@@ -253,21 +324,47 @@
 
   function runDagreLayout() {
     if (!cy) return;
-    const positions = layoutPositions({nodes: cy.nodes().map(n => ({data:n.data()})), edges: cy.edges().map(e => ({data:e.data()}))});
-    cy.batch(() => cy.nodes().forEach(node => node.position(positions[node.id()])));
+    if (mode === "grouped") {
+      const positions = groupedLayoutPositions({
+        nodes: cy.nodes().map((n) => ({ id: n.id(), data: n.data() })),
+        edges: cy.edges()
+          .filter((e) => !e.hasClass("aggregate-edge"))
+          .map((e) => ({ id: e.id(), data: e.data() })),
+      });
+      cy.batch(() => cy.nodes().forEach((node) => {
+        const position = positions[node.id()];
+        if (position) node.position(position);
+      }));
+    } else {
+      const positions = layoutPositions({nodes: cy.nodes().map(n => ({data:n.data()})), edges: cy.edges().map(e => ({data:e.data()}))});
+      cy.batch(() => cy.nodes().forEach(node => node.position(positions[node.id()])));
+    }
     readableView();
   }
-  export function fitView() { if (cy) cy.fit(50); }
+
+  function visibleElements() {
+    if (!cy) return [];
+    return cy.elements().filter((element) => element.style("display") !== "none");
+  }
+
+  export function fitView() {
+    if (!cy) return;
+    const visible = visibleElements();
+    if (visible.length) cy.fit(visible, 50);
+  }
   export function readableView() {
-    if (!cy || !cy.nodes().length) return;
-    cy.fit(40);
+    if (!cy) return;
+    const visible = visibleElements();
+    const nodes = visible.filter((element) => element.isNode());
+    if (!nodes.length) return;
+    cy.fit(visible, 40);
     if (cy.zoom() >= READABLE_ZOOM) return;
     cy.zoom(READABLE_ZOOM);
     const zoom = cy.zoom();
-    const bb = cy.nodes().boundingBox();
+    const bb = nodes.boundingBox();
     // Focus the whole root/top layer rather than a single arbitrary node.
-    const minY = Math.min(...cy.nodes().map((n) => n.position().y));
-    const topLayer = cy.nodes().filter((n) => n.position().y <= minY + ROW_GAP).boundingBox();
+    const minY = Math.min(...nodes.map((n) => n.position().y));
+    const topLayer = nodes.filter((n) => n.position().y <= minY + ROW_GAP).boundingBox();
     const w = cy.width(), h = cy.height();
     const minPanX = w - zoom * bb.x2 - VIEW_MARGIN, maxPanX = -zoom * bb.x1 + VIEW_MARGIN;
     const minPanY = h - zoom * bb.y2 - VIEW_MARGIN, maxPanY = -zoom * bb.y1 + VIEW_MARGIN;
@@ -278,15 +375,74 @@
     cy.pan({ x: panX, y: panY });
   }
 
+  function applyGroupState() {
+    if (!cy || mode !== "grouped") return;
+    cy.nodes('[type="group"]').forEach((group) => {
+      const expanded = expandedGroups.has(group.id());
+      group.data("expanded", expanded);
+      (group.data("memberIds") || []).forEach((memberId) => {
+        const member = cy.getElementById(memberId);
+        if (member.length) member.toggleClass("group-hidden", !expanded);
+      });
+    });
+    refreshGroupEdges();
+  }
+
+  function refreshGroupEdges() {
+    if (!cy || mode !== "grouped") return;
+    cy.edges().filter((edge) => !edge.hasClass("aggregate-edge")).forEach((edge) => {
+      const hidden = edge.source().hasClass("group-hidden") || edge.target().hasClass("group-hidden");
+      edge.toggleClass("group-hidden-edge", hidden);
+    });
+    cy.remove(cy.edges(".aggregate-edge"));
+    const grouped = {
+      nodes: cy.nodes().map((node) => ({ id: node.id(), data: node.data() })),
+      edges: cy.edges()
+        .filter((edge) => !edge.hasClass("aggregate-edge"))
+        .map((edge) => ({ id: edge.id(), data: edge.data() })),
+    };
+    const additions = aggregateEdges(grouped, [...expandedGroups]);
+    if (additions.length) {
+      cy.batch(() => {
+        additions.forEach((element) => cy.add(element).addClass("aggregate-edge"));
+      });
+    }
+  }
+
+  function toggleGroup(group) {
+    if (!cy || !group) return;
+    const id = group.id();
+    if (expandedGroups.has(id)) expandedGroups.delete(id);
+    else expandedGroups.add(id);
+    savePreference(GROUP_STATE_KEY, [...expandedGroups]);
+    applyGroupState();
+    if (selectedNode && selectedNode.type === "group" && selectedNode.id === id) {
+      selectedNode = { ...group.data() };
+    }
+    if (selectedNode && selectedNode.type !== "group") {
+      const selected = cy.getElementById(selectedNode.id);
+      if (!selected.length || selected.hasClass("group-hidden")) {
+        selectedNode = null;
+      }
+    }
+    applyEdgeHighlight(selectedNode ? selectedNode.id : null);
+  }
+
+  function toggleSelectedGroup() {
+    if (!cy || !selectedNode || selectedNode.type !== "group") return;
+    toggleGroup(cy.getElementById(selectedNode.id));
+  }
+
   function applyEdgeHighlight(nodeId) {
     if (!cy) return;
     const edges = cy.edges();
+    const reset = (edge) => {
+      edge.style("width", 2);
+      edge.style("line-color", edge.hasClass("aggregate-edge") ? "#9aa7b4" : "#666");
+      edge.style("opacity", edge.hasClass("aggregate-edge") ? 0.75 : 1);
+    };
     if (!nodeId) {
-      edges.forEach((e) => {
-        e.style("width", 2);
-        e.style("line-color", "#666");
-        e.style("opacity", 1);
-      });
+      edges.forEach(reset);
       return;
     }
     const connected = new Set();
@@ -296,6 +452,12 @@
     }
     edges.forEach((e) => {
       const active = connected.has(e.id());
+      if (e.hasClass("aggregate-edge")) {
+        e.style("width", active ? 3 : 2);
+        e.style("line-color", "#9aa7b4");
+        e.style("opacity", active ? 1 : 0.5);
+        return;
+      }
       e.style("width", active ? 3 : 1);
       e.style("line-color", active ? "#888" : "#999");
       e.style("opacity", active ? 1 : 0.25);
@@ -315,7 +477,7 @@
       positions[node.id()] = { x: pos.x, y: pos.y, pinned: true };
     });
     try {
-      if (!savePreference(`hlh.mapLayout.${viewKey}`, positions)) addToast("Could not save map layout in this browser", "error");
+      if (!savePreference(layoutStorageKey(mode, viewKey), positions)) addToast("Could not save map layout in this browser", "error");
     } catch (e) {
       // silent fail on layout save
     }
@@ -336,6 +498,43 @@
 {/if}
 
 {#if selectedNode}
+  {#if selectedNode.type === "group"}
+    <div class="info-panel">
+      <div class="info-header">
+        <h3>{selectedNode.kind === "ungrouped" ? "Ungrouped" : selectedNode.label}</h3>
+        <button class="close-btn" on:click={() => { selectedNode = null; applyEdgeHighlight(null); }}>×</button>
+      </div>
+      <div class="info-content">
+        <div class="info-item">
+          <span class="info-label">Host:</span>
+          <span class="info-value">{selectedNode.hostLabel}</span>
+        </div>
+        <div class="info-item">
+          <span class="info-label">Members:</span>
+          <span class="info-value">{selectedNode.visibleMembers} in inventory · {selectedNode.unmatchedMembers} not in inventory</span>
+        </div>
+        {#if selectedNode.members && selectedNode.members.length}
+          <div class="info-item notes">
+            <span class="info-label">Containers:</span>
+            <span class="info-value group-member-list">
+              {#each selectedNode.members as member}
+                <a href={`#/inventory/${member.type}/${member.entity_id}`}>{member.label}</a>
+              {/each}
+            </span>
+          </div>
+        {/if}
+        {#if selectedNode.unmatchedLabels && selectedNode.unmatchedLabels.length}
+          <div class="info-item notes">
+            <span class="info-label">Not in inventory:</span>
+            <span class="info-value">{selectedNode.unmatchedLabels.join(", ")}</span>
+          </div>
+        {/if}
+      </div>
+      <div class="info-footer">
+        <button class="secondary outline small" on:click={toggleSelectedGroup}>{selectedNode.expanded ? "Collapse group" : "Expand group"}</button>
+      </div>
+    </div>
+  {:else}
   <div class="info-panel">
     <div class="info-header">
       <h3>
@@ -489,6 +688,7 @@
       <a href="#/inventory/{selectedNode.type}/{selectedNode.entity_id}" class="view-link">View in Inventory →</a>
     </div>
   </div>
+  {/if}
 {/if}
 
 <div class="networks-panel">
@@ -641,6 +841,13 @@
     display: flex;
     align-items: center;
     gap: 0.5rem;
+  }
+  .group-member-list {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.2rem;
+    max-height: 180px;
+    overflow-y: auto;
   }
   .network-indicator {
     width: 12px;
