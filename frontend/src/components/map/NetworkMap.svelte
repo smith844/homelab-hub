@@ -5,10 +5,13 @@
   import { addToast } from "../../lib/stores.js";
   import { theme, readPreference, savePreference } from "../../lib/preferences.js";
 
-  import { layoutPositions } from "../../lib/mapViews.js";
+  import { layoutPositions, layoutMissingPositions, validSavedPositions, ROW_GAP } from "../../lib/mapViews.js";
   export let graphData = null;
   export let viewKey = "all";
+  const READABLE_ZOOM = 0.8;
+  const VIEW_MARGIN = 60;
   let disposed = false;
+  let resizeObserver;
 
   let container;
   let cy;
@@ -64,15 +67,19 @@
       ]);
 
       if (disposed) return;
-      const savedPositions = layoutRes.data || {};
+      // Only finite saved coordinates are applied or counted as saved.
+      const savedPositions = validSavedPositions(layoutRes.data);
+      const missingPositions = layoutMissingPositions(graphRes, savedPositions);
       networks = networksRes.networks || [];
 
-      // Apply saved positions to nodes
+      // Apply saved positions; only nodes without one are placed automatically.
       const nodes = graphRes.nodes.map((n) => {
         const saved = savedPositions[n.data.id];
         if (saved) {
           n.position = { x: saved.x, y: saved.y };
           // Don't lock nodes - they should always be draggable
+        } else if (missingPositions[n.data.id]) {
+          n.position = missingPositions[n.data.id];
         }
         return n;
       });
@@ -178,13 +185,21 @@
         maxZoom: 3,
       });
 
-      // If no saved positions, run dagre layout
-      const hasSavedPositions = Object.keys(savedPositions).length > 0;
-      if (!hasSavedPositions && nodes.length > 0) {
-        runDagreLayout();
+      // Keep the canvas dimensions in sync without touching the user's view.
+      if (typeof ResizeObserver !== "undefined") {
+        resizeObserver = new ResizeObserver(() => {
+          if (cy) cy.resize();
+        });
+        resizeObserver.observe(container);
       }
 
-      if (hasSavedPositions) readableView();
+      // Only auto-layout when no node has a saved position.
+      const hasSavedPositions = nodes.some((n) => savedPositions[n.data.id]);
+      if (!hasSavedPositions && nodes.length > 0) {
+        runDagreLayout();
+      } else if (hasSavedPositions) {
+        readableView();
+      }
 
       // Persist positions on drag end
       cy.on("dragfree", "node", () => {
@@ -228,6 +243,10 @@
 
   onDestroy(() => {
     disposed = true;
+    if (resizeObserver) {
+      resizeObserver.disconnect();
+      resizeObserver = null;
+    }
     if (cy) cy.destroy();
     clearTimeout(saveTimeout);
   });
@@ -241,12 +260,22 @@
   export function fitView() { if (cy) cy.fit(50); }
   export function readableView() {
     if (!cy || !cy.nodes().length) return;
-    cy.fit(65);
-    if (cy.zoom() < 0.65) {
-      cy.zoom(0.65);
-      const first = cy.nodes().sort((a,b) => a.position().y-b.position().y)[0];
-      cy.pan({x:cy.width()/2-first.position().x*cy.zoom(),y:90-first.position().y*cy.zoom()});
-    }
+    cy.fit(40);
+    if (cy.zoom() >= READABLE_ZOOM) return;
+    cy.zoom(READABLE_ZOOM);
+    const zoom = cy.zoom();
+    const bb = cy.nodes().boundingBox();
+    // Focus the whole root/top layer rather than a single arbitrary node.
+    const minY = Math.min(...cy.nodes().map((n) => n.position().y));
+    const topLayer = cy.nodes().filter((n) => n.position().y <= minY + ROW_GAP).boundingBox();
+    const w = cy.width(), h = cy.height();
+    const minPanX = w - zoom * bb.x2 - VIEW_MARGIN, maxPanX = -zoom * bb.x1 + VIEW_MARGIN;
+    const minPanY = h - zoom * bb.y2 - VIEW_MARGIN, maxPanY = -zoom * bb.y1 + VIEW_MARGIN;
+    let panX = w / 2 - zoom * (topLayer.x1 + topLayer.x2) / 2;
+    let panY = VIEW_MARGIN - zoom * topLayer.y1;
+    panX = minPanX > maxPanX ? (w - zoom * (bb.x1 + bb.x2)) / 2 : Math.min(Math.max(panX, minPanX), maxPanX);
+    panY = minPanY > maxPanY ? (h - zoom * (bb.y1 + bb.y2)) / 2 : Math.min(Math.max(panY, minPanY), maxPanY);
+    cy.pan({ x: panX, y: panY });
   }
 
   function applyEdgeHighlight(nodeId) {

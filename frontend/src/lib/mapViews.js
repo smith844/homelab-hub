@@ -1,5 +1,9 @@
 export const TYPES = ["hardware", "vms", "apps", "storage", "shares", "misc"];
 export const TYPE_LABELS = { hardware: "Hosts", vms: "VMs / LXCs / runtimes", apps: "Applications", storage: "Storage", shares: "Shares", misc: "Other devices" };
+// Spacing tuned for the 64px node cards and their wrapped 14px labels.
+export const COLUMN_GAP = 190;
+export const ROW_GAP = 150;
+export const LAYER_GAP = 100;
 // Only placement edges define ancestry. Custom dependency links must not pull a
 // different host into a scoped host view (or recurse forever through cycles).
 export function placementEdges(graph) {
@@ -46,12 +50,56 @@ export function filterGraph(graph, { root = "", types = TYPES, query = "", membe
   return { nodes: nodes.filter(n => keep.has(n.data.id)).map(n => ({ ...n, data: { ...n.data, context: !matchIds.has(n.data.id) } })),
     edges: edges.filter(e => keep.has(e.data.source) && keep.has(e.data.target)), matches: matches.length };
 }
+// Longest placement path per node. Cycles are broken at DFS back edges so
+// circular placement data cannot inflate levels; acyclic hierarchies keep
+// their exact ordering. The edges parameter defaults to the placement edges.
+export function layoutLevels(graph, edges = placementEdges(graph)) {
+  const nodes = graph.nodes || [];
+  const outgoing = new Map();
+  for (const e of edges) {
+    if (!outgoing.has(e.data.source)) outgoing.set(e.data.source, []);
+    outgoing.get(e.data.source).push(e.data.target);
+  }
+  // Depth-first pass keeps only edges that do not close a cycle.
+  const state = new Map();
+  const acyclic = [];
+  for (const n of nodes) {
+    if (state.has(n.data.id)) continue;
+    state.set(n.data.id, 1);
+    const stack = [{ id: n.data.id, index: 0 }];
+    while (stack.length) {
+      const frame = stack[stack.length - 1];
+      const targets = outgoing.get(frame.id) || [];
+      if (frame.index >= targets.length) {
+        state.set(frame.id, 2);
+        stack.pop();
+        continue;
+      }
+      const target = targets[frame.index++];
+      const targetState = state.get(target);
+      if (targetState === 1) continue; // back edge: would close a cycle
+      acyclic.push({ data: { source: frame.id, target } });
+      if (targetState === undefined) {
+        state.set(target, 1);
+        stack.push({ id: target, index: 0 });
+      }
+    }
+  }
+  const level = new Map(nodes.map(n => [n.data.id, 0]));
+  for (let pass = 0; pass < nodes.length; pass++) {
+    let changed = false;
+    for (const e of acyclic) {
+      const next = (level.get(e.data.source) ?? 0) + 1;
+      if (next > (level.get(e.data.target) ?? 0)) { level.set(e.data.target, next); changed = true; }
+    }
+    if (!changed) break;
+  }
+  return level;
+}
 // Layered grid wraps large layers instead of forcing all containers into a row.
 export function layoutPositions(graph, columns = 8) {
-  const placement = placementEdges(graph), nodes = graph.nodes;
-  const level = new Map(nodes.map(n => [n.data.id, 0]));
-  for (let i = 0; i < 4; i++) for (const e of placement)
-    level.set(e.data.target, Math.max(level.get(e.data.target), level.get(e.data.source) + 1));
+  const nodes = graph.nodes || [];
+  const level = layoutLevels(graph);
   const groups = new Map();
   for (const n of nodes) { const l = level.get(n.data.id); if (!groups.has(l)) groups.set(l, []); groups.get(l).push(n); }
   const positions = {}; let y = 0;
@@ -59,10 +107,41 @@ export function layoutPositions(graph, columns = 8) {
     const items = groups.get(l).sort((a,b) => (a.data.rawName || a.data.label || "").localeCompare(b.data.rawName || b.data.label || ""));
     for (let i=0;i<items.length;i++) {
       const rowStart = Math.floor(i/columns)*columns, rowLength = Math.min(columns, items.length-rowStart);
-      positions[items[i].data.id] = { x: ((i%columns)-(rowLength-1)/2)*160, y: y+Math.floor(i/columns)*130 };
+      positions[items[i].data.id] = { x: ((i%columns)-(rowLength-1)/2)*COLUMN_GAP, y: y+Math.floor(i/columns)*ROW_GAP };
     }
-    y += Math.ceil(items.length/columns)*130+80;
+    y += Math.ceil(items.length/columns)*ROW_GAP+LAYER_GAP;
   }
+  return positions;
+}
+// Saved positions are only usable when both coordinates are finite numbers.
+export function isValidSavedPosition(pos) {
+  return !!pos && Number.isFinite(pos.x) && Number.isFinite(pos.y);
+}
+export function validSavedPositions(positions = {}) {
+  return Object.fromEntries(Object.entries(positions || {}).filter(([, p]) => isValidSavedPosition(p)));
+}
+// Place only nodes that have no saved position, in free space below the saved
+// layout. Saved positions are never moved and the new rows cannot overlap them.
+export function layoutMissingPositions(graph, savedPositions = {}, columns = 8) {
+  const nodes = graph.nodes || [];
+  const nodeIds = new Set(nodes.map(n => n.data.id));
+  const validSaved = Object.entries(validSavedPositions(savedPositions))
+    .filter(([id]) => nodeIds.has(id));
+  if (!validSaved.length) return {};
+  const savedIds = new Set(validSaved.map(([id]) => id));
+  const missing = nodes.filter(n => !savedIds.has(n.data.id));
+  if (!missing.length) return {};
+  const minX = Math.min(...validSaved.map(([, p]) => p.x));
+  const maxX = Math.max(...validSaved.map(([, p]) => p.x));
+  const maxY = Math.max(...validSaved.map(([, p]) => p.y));
+  const centreX = (minX + maxX) / 2;
+  const sorted = missing.slice().sort((a,b) => (a.data.rawName || a.data.label || "").localeCompare(b.data.rawName || b.data.label || ""));
+  const positions = {};
+  sorted.forEach((n, i) => {
+    const row = Math.floor(i / columns), rowStart = row * columns;
+    const rowLength = Math.min(columns, sorted.length - rowStart);
+    positions[n.data.id] = { x: centreX + ((i % columns) - (rowLength - 1) / 2) * COLUMN_GAP, y: maxY + ROW_GAP + row * ROW_GAP };
+  });
   return positions;
 }
 export function buildForest(graph) {
