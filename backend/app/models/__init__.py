@@ -8,6 +8,11 @@ from .share import Share
 from .network import Network, NetworkMember
 from .misc import Misc
 from .map_layout import MapLayout, MapEdge, Relationship
+from .container_group import (
+    ContainerGroup,
+    ContainerGroupAssignment,
+    ContainerGroupOverride,
+)
 
 __all__ = [
     "db",
@@ -24,4 +29,7 @@ __all__ = [
     "MapLayout",
     "MapEdge",
     "Relationship",
+    "ContainerGroup",
+    "ContainerGroupAssignment",
+    "ContainerGroupOverride",
 ]

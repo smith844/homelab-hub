@@ -1,0 +1,47 @@
+{
+  "folder-ai": {
+    "name": "AI",
+    "parentId": "",
+    "containers": ["open-webui", "Ollama"],
+    "memberIdentities": [
+      {
+        "composeProject": "ai-stack",
+        "containerId": "synthetic-container-1",
+        "image": "example.invalid/ai/open-webui:latest",
+        "imageId": "sha256:synthetic-image-1",
+        "kind": "docker",
+        "mountDestinations": ["/app/backend/data"],
+        "template": "my-open-webui.xml"
+      }
+    ],
+    "regex": "",
+    "icon": "https://example.invalid/icons/ai.png",
+    "settings": { "color": "#123456" },
+    "actions": [],
+    "updatedAt": "2026-01-01T00:00:00Z"
+  },
+  "folder-media": {
+    "name": "Media",
+    "parentId": "",
+    "containers": ["plex", "sonarr"],
+    "memberIdentities": [],
+    "regex": "",
+    "icon": "",
+    "settings": {},
+    "actions": [],
+    "updatedAt": "2026-01-02T00:00:00Z"
+  },
+  "folder-empty": {
+    "name": "Empty",
+    "parentId": "folder-media",
+    "containers": [],
+    "memberIdentities": [],
+    "regex": "",
+    "icon": "",
+    "settings": {},
+    "actions": [],
+    "updatedAt": "2026-01-03T00:00:00Z",
+    "createdAt": "2025-12-01T00:00:00Z",
+    "hiddenPreviewMembers": ["plex"]
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "folder-a": {
+    "name": "Alpha",
+    "parentId": "",
+    "containers": ["shared-app", "alpha"],
+    "memberIdentities": [],
+    "regex": "",
+    "icon": "",
+    "settings": {},
+    "actions": [],
+    "updatedAt": "2026-03-01T00:00:00Z"
+  },
+  "folder-b": {
+    "name": "Beta",
+    "parentId": "",
+    "containers": ["shared-app", 123, "beta"],
+    "memberIdentities": [],
+    "regex": "",
+    "icon": "",
+    "settings": {},
+    "actions": [],
+    "updatedAt": "2026-03-02T00:00:00Z"
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "folder-downloads": {
+    "name": "Download Clients",
+    "parentId": "",
+    "containers": ["sabnzbd"],
+    "memberIdentities": [
+      {
+        "composeProject": "downloads",
+        "containerId": "synthetic-container-2",
+        "image": "example.invalid/downloads/sabnzbd:latest",
+        "imageId": "sha256:synthetic-image-2",
+        "kind": "docker",
+        "mountDestinations": ["/config"],
+        "template": "my-sabnzbd.xml"
+      }
+    ],
+    "regex": "^arr-",
+    "icon": "https://example.invalid/icons/downloads.png",
+    "settings": { "color": "#654321", "order": 4 },
+    "actions": [{ "type": "start", "label": "Start" }],
+    "updatedAt": "2026-02-01T00:00:00Z",
+    "createdAt": "2025-11-01T00:00:00Z",
+    "hiddenPreviewMembers": ["arr-extra"]
+  }
+}

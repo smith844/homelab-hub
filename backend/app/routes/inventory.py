@@ -1,6 +1,11 @@
 from flask import Blueprint, jsonify, request
 from ..models import *
 from ..models.base import db
+from ..services.group_backup import (
+    export_group_data,
+    has_group_backup_data,
+    import_group_data,
+)
 import json
 
 bp = Blueprint('inventory', __name__, url_prefix='/inventory')
@@ -57,6 +62,8 @@ def export_database():
             'misc': [m.to_dict() for m in Misc.query.all()],
             'documents': [d.to_dict() for d in Document.query.all()]
         }
+        # Container grouping data uses natural keys, never database ids.
+        data.update(export_group_data(db.session))
         return jsonify(data)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -152,6 +159,10 @@ def import_database():
             for item in import_data['documents']:
                 document = Document(**clean_item(item))
                 db.session.add(document)
+
+        # Container grouping data (optional; legacy exports do not include it).
+        if has_group_backup_data(import_data):
+            import_group_data(db.session, import_data)
 
         db.session.commit()
         return jsonify({'message': 'Database imported successfully'})

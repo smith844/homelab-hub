@@ -25,6 +25,10 @@ def create_app(config_class=Config):
     from .routes import register_blueprints
     register_blueprints(app)
 
+    # Container grouping maintenance commands (CLI, not HTTP)
+    from .cli import register_cli
+    register_cli(app)
+
     # Health check
     @app.route("/api/health")
     def health():

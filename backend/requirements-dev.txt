@@ -1,0 +1,2 @@
+# Development/test-only dependencies. The production image uses requirements.txt.
+pytest>=8
