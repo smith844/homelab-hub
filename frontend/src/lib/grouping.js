@@ -21,6 +21,23 @@ export function layoutStorageKey(mode, viewKey) {
   return `${prefix}.${viewKey}`;
 }
 
+// Manual Grouped anchors are stored separately from layout coordinates, so a
+// saved position never implies a manual anchor on its own.
+export function anchorsStorageKey(viewKey) {
+  return `hlh.mapGroupAnchors.${viewKey}`;
+}
+
+export function validAnchors(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const result = {};
+  for (const [id, position] of Object.entries(value)) {
+    if (position && Number.isFinite(position.x) && Number.isFinite(position.y)) {
+      result[id] = { x: position.x, y: position.y };
+    }
+  }
+  return result;
+}
+
 const CARD_WIDTH = 220;
 const CARD_HEIGHT = 92;
 const CARD_GAP = 40;
@@ -289,11 +306,28 @@ export function visibleNodeIds(grouped, expandedGroupIds = []) {
  * that case the component recomputes the grouped layout instead of mixing
  * stale card positions with newly expanded members.
  */
-export function hasStaleGroupedLayout(grouped, savedPositions = {}, expandedGroupIds = []) {
+/**
+ * True when a saved Grouped layout does not cover the currently expanded,
+ * non-anchored members (for example, it was saved while those groups were
+ * collapsed). Anchored groups are laid out from their anchors, so they do not
+ * make the saved layout stale.
+ */
+export function hasStaleGroupedLayout(
+  grouped,
+  savedPositions = {},
+  expandedGroupIds = [],
+  rawAnchors = {}
+) {
   const expanded = new Set(expandedGroupIds);
+  const anchoredGroupIds = new Set(Object.keys(validAnchors(rawAnchors)));
   return (grouped?.nodes || []).some((node) => {
     const groupId = node.data.groupNodeId;
-    return Boolean(groupId) && expanded.has(groupId) && !savedPositions[node.data.id];
+    return (
+      Boolean(groupId) &&
+      expanded.has(groupId) &&
+      !anchoredGroupIds.has(groupId) &&
+      !savedPositions[node.data.id]
+    );
   });
 }
 
@@ -438,8 +472,57 @@ function buildLane(groups, expanded, byId) {
  * re-flows the surrounding cards. Hosts are stacked, so Betty and Blackbox
  * never share a lane.
  */
-export function groupedLayoutPositions(grouped, expandedGroupIds = []) {
+function placeMembersUnder(anchor, members) {
+  const positions = new Map();
+  if (!members.length) return positions;
+  const columns = memberColumns(members.length);
+  const visibleColumns = Math.min(columns, members.length);
+  members.forEach((member, index) => {
+    const column = index % columns;
+    const row = Math.floor(index / columns);
+    positions.set(member.data.id, {
+      x: anchor.x + (column - (visibleColumns - 1) / 2) * MEMBER_PITCH,
+      y: anchor.y + CARD_HEIGHT / 2 + 80 + row * MEMBER_ROW,
+    });
+  });
+  return positions;
+}
+
+function groupRect(center, members = []) {
+  let x1 = center.x - CARD_WIDTH / 2 - 20;
+  let x2 = center.x + CARD_WIDTH / 2 + 20;
+  let y1 = center.y - CARD_HEIGHT / 2 - 20;
+  let y2 = center.y + CARD_HEIGHT / 2 + 20;
+  for (const member of members) {
+    x1 = Math.min(x1, member.x - 80);
+    x2 = Math.max(x2, member.x + 80);
+    y1 = Math.min(y1, member.y - 60);
+    y2 = Math.max(y2, member.y + 60);
+  }
+  return { x1, x2, y1, y2 };
+}
+
+function rectsIntersect(a, b) {
+  return a.x1 < b.x2 && a.x2 > b.x1 && a.y1 < b.y2 && a.y2 > b.y1;
+}
+
+/**
+ * Deterministic layout for Grouped mode.
+ *
+ * - Manual anchors (dragged group cards) are fixed and never moved by layout.
+ * - Anchored groups place their expanded members directly beneath the anchor.
+ * - Collapsed groups use a compact card grid under their Docker/VM parent.
+ * - Expanding a group reserves a member grid beneath its card and re-flows the
+ *   remaining automatic groups, avoiding anchored cards and their members.
+ * - Hosts are stacked, so Betty and Blackbox never share a lane.
+ */
+export function groupedLayoutPositions(
+  grouped,
+  expandedGroupIds = [],
+  rawAnchors = {}
+) {
   const expanded = new Set(expandedGroupIds);
+  const anchors = validAnchors(rawAnchors);
   const nodes = grouped?.nodes || [];
   const byId = new Map(nodes.map((node) => [node.data.id, node]));
   const positions = {};
@@ -453,6 +536,31 @@ export function groupedLayoutPositions(grouped, expandedGroupIds = []) {
       !node.data.groupNodeId
   );
 
+  const anchoredGroups = groups
+    .filter((group) => anchors[group.data.id])
+    .sort((a, b) => a.data.id.localeCompare(b.data.id));
+  const anchoredIds = new Set(anchoredGroups.map((group) => group.data.id));
+
+  // Place anchored cards first. They are fixed for the whole layout pass.
+  const occupied = [];
+  const anchoredBottomByHost = new Map();
+  for (const group of anchoredGroups) {
+    const anchor = anchors[group.data.id];
+    positions[group.data.id] = { x: anchor.x, y: anchor.y };
+    const members = expanded.has(group.data.id)
+      ? (group.data.memberIds || []).map((id) => byId.get(id)).filter(Boolean)
+      : [];
+    const memberPositions = placeMembersUnder(anchor, members);
+    for (const [id, position] of memberPositions) positions[id] = position;
+    const rect = groupRect(anchor, [...memberPositions.values()]);
+    occupied.push(rect);
+    const hostKey = group.data.hostKey || "";
+    anchoredBottomByHost.set(
+      hostKey,
+      Math.max(anchoredBottomByHost.get(hostKey) ?? -Infinity, rect.y2)
+    );
+  }
+
   const hostKeys = new Set([
     ...hosts.map(hostKeyOfHardware),
     ...groups.map((group) => group.data.hostKey || ""),
@@ -463,7 +571,10 @@ export function groupedLayoutPositions(grouped, expandedGroupIds = []) {
   for (const hostKey of [...hostKeys].sort((a, b) => a.localeCompare(b))) {
     const top = nextHostY;
     const hostNode = hosts.find((node) => hostKeyOfHardware(node) === hostKey) || null;
-    const blockGroups = groups.filter((group) => (group.data.hostKey || "") === hostKey);
+    const blockGroups = groups.filter(
+      (group) =>
+        (group.data.hostKey || "") === hostKey && !anchoredIds.has(group.data.id)
+    );
     const blockLoose = loose.filter((node) => (node.data.hostKey || "") === hostKey);
 
     const lanesByParent = new Map();
@@ -495,8 +606,10 @@ export function groupedLayoutPositions(grouped, expandedGroupIds = []) {
       .sort((a, b) => {
         if (a.parentId === "__host__") return 1;
         if (b.parentId === "__host__") return -1;
-        return labelOf(a.parent).localeCompare(labelOf(b.parent)) ||
-          a.parentId.localeCompare(b.parentId);
+        return (
+          labelOf(a.parent).localeCompare(labelOf(b.parent)) ||
+          a.parentId.localeCompare(b.parentId)
+        );
       });
 
     const laneLayouts = lanes.map((lane) => ({
@@ -534,7 +647,11 @@ export function groupedLayoutPositions(grouped, expandedGroupIds = []) {
       const looseY = blockBottom ? blockBottom + 120 : top + 180;
       const width = (remainingLoose.length - 1) * OTHER_PITCH;
       remainingLoose
-        .sort((a, b) => String(a.data.type).localeCompare(String(b.data.type)) || sortByLabel(a, b))
+        .sort(
+          (a, b) =>
+            String(a.data.type).localeCompare(String(b.data.type)) ||
+            sortByLabel(a, b)
+        )
         .forEach((node, index) => {
           positions[node.data.id] = {
             x: -width / 2 + index * OTHER_PITCH,
@@ -544,18 +661,74 @@ export function groupedLayoutPositions(grouped, expandedGroupIds = []) {
       blockBottom = Math.max(blockBottom, looseY - top + 40);
     }
 
+    // Automatic groups shift down when they collide with anchored cards or
+    // their expanded members. Anchored cards themselves never move.
+    const autoGroups = [...blockGroups].sort((a, b) =>
+      a.data.id.localeCompare(b.data.id)
+    );
+    for (const group of autoGroups) {
+      const position = positions[group.data.id];
+      if (!position) continue;
+      const members = expanded.has(group.data.id)
+        ? (group.data.memberIds || []).map((id) => byId.get(id)).filter(Boolean)
+        : [];
+      const moveMembers = (deltaY) => {
+        for (const member of members) {
+          const memberPosition = positions[member.data.id];
+          if (memberPosition) {
+            positions[member.data.id] = {
+              x: memberPosition.x,
+              y: memberPosition.y + deltaY,
+            };
+          }
+        }
+      };
+      let rect = groupRect(
+        position,
+        members.map((member) => positions[member.data.id]).filter(Boolean)
+      );
+      let guard = 0;
+      while (occupied.some((other) => rectsIntersect(rect, other)) && guard < 500) {
+        const deltaY = CARD_HEIGHT + CARD_GAP;
+        position.y += deltaY;
+        positions[group.data.id] = { x: position.x, y: position.y };
+        moveMembers(deltaY);
+        rect = groupRect(
+          position,
+          members.map((member) => positions[member.data.id]).filter(Boolean)
+        );
+        guard += 1;
+      }
+      occupied.push(rect);
+      const memberRows = members.length
+        ? Math.ceil(members.length / memberColumns(members.length))
+        : 0;
+      blockBottom = Math.max(
+        blockBottom,
+        position.y -
+          top +
+          CARD_HEIGHT / 2 +
+          (memberRows ? 80 + memberRows * MEMBER_ROW : 0) +
+          40
+      );
+    }
+
+    const anchoredBottom = anchoredBottomByHost.get(hostKey);
+    if (anchoredBottom !== undefined) {
+      blockBottom = Math.max(blockBottom, anchoredBottom - top + 40);
+    }
+
     if (hostNode) {
       positions[hostNode.data.id] = { x: 0, y: top };
     }
-
     nextHostY = top + Math.max(blockBottom, 200) + HOST_GAP;
   }
 
-  // Fallback for visible nodes that did not fit a lane (e.g. orphan inventory).
+  // Fallback for visible nodes that did not fit a lane.
   let fallbackY = nextHostY;
   for (const node of nodes) {
     if (positions[node.data.id]) continue;
-    if (node.data.type === "apps" && node.data.groupNodeId) continue; // collapsed member
+    if (node.data.type === "apps" && node.data.groupNodeId) continue;
     positions[node.data.id] = { x: 0, y: fallbackY };
     fallbackY += 140;
   }

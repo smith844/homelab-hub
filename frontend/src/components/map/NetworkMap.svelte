@@ -6,7 +6,7 @@
   import { theme, readPreference, savePreference } from "../../lib/preferences.js";
 
   import { layoutPositions, layoutMissingPositions, validSavedPositions, ROW_GAP } from "../../lib/mapViews.js";
-  import { groupedLayoutPositions, hasStaleGroupedLayout, layoutStorageKey, presentationEdges } from "../../lib/grouping.js";
+  import { groupedLayoutPositions, hasStaleGroupedLayout, anchorsStorageKey, layoutStorageKey, presentationEdges, validAnchors } from "../../lib/grouping.js";
   export let graphData = null;
   export let viewKey = "all";
   export let mode = "graph";
@@ -16,6 +16,7 @@
   let disposed = false;
   let resizeObserver;
   let expandedGroups = new Set();
+  let groupAnchors = {};
 
   let container;
   let cy;
@@ -85,14 +86,35 @@
       );
       // Only finite saved coordinates are applied or counted as saved.
       const savedPositions = validSavedPositions(layoutRes.data);
+      groupAnchors = mode === "grouped"
+        ? validAnchors(readPreference(anchorsStorageKey(viewKey), {}))
+        : {};
+      const anchoredMemberIds = new Set();
+      for (const node of graphRes.nodes) {
+        if (node.data.type === "group" && groupAnchors[node.data.id]) {
+          (node.data.memberIds || []).forEach((id) => anchoredMemberIds.add(id));
+        }
+      }
       const staleGroupedLayout = mode === "grouped" &&
-        hasStaleGroupedLayout(graphRes, savedPositions, [...expandedGroups]);
+        hasStaleGroupedLayout(graphRes, savedPositions, [...expandedGroups], groupAnchors);
       const missingPositions = mode === "grouped" ? {} : layoutMissingPositions(graphRes, savedPositions);
-      const groupedPositions = mode === "grouped" ? groupedLayoutPositions(graphRes, [...expandedGroups]) : {};
+      const groupedPositions = mode === "grouped"
+        ? groupedLayoutPositions(graphRes, [...expandedGroups], groupAnchors)
+        : {};
       networks = networksRes.networks || [];
 
-      // Apply saved positions; only nodes without one are placed automatically.
+      // Manual group anchors and the layout are applied first; saved positions
+      // fill in everything else.
       const nodes = graphRes.nodes.map((n) => {
+        const anchor = groupAnchors[n.data.id];
+        if (anchor) {
+          n.position = { x: anchor.x, y: anchor.y };
+          return n;
+        }
+        if (mode === "grouped" && anchoredMemberIds.has(n.data.id) && groupedPositions[n.data.id]) {
+          n.position = groupedPositions[n.data.id];
+          return n;
+        }
         const saved = staleGroupedLayout ? null : savedPositions[n.data.id];
         if (saved) {
           n.position = { x: saved.x, y: saved.y };
@@ -293,8 +315,20 @@
         readableView();
       }
 
-      // Persist positions on drag end
-      cy.on("dragfree", "node", () => {
+      // Persist positions on drag end. Dragging a group card promotes it to a
+      // manual anchor that survives expansion/collapse and reloads.
+      cy.on("dragfree", "node", (evt) => {
+        const node = evt.target;
+        if (mode === "grouped" && node.data("type") === "group") {
+          groupAnchors = {
+            ...groupAnchors,
+            [node.id()]: { x: node.position().x, y: node.position().y },
+          };
+          savePreference(anchorsStorageKey(viewKey), groupAnchors);
+          reapplyGroupedLayout();
+          refreshGroupEdges();
+          applyEdgeHighlight(selectedNode ? selectedNode.id : null);
+        }
         debounceSaveLayout();
       });
 
@@ -357,7 +391,7 @@
         edges: cy.edges()
           .filter((e) => !e.hasClass("virtual-edge"))
           .map((e) => ({ id: e.id(), data: e.data() })),
-      }, [...expandedGroups]);
+      }, [...expandedGroups], groupAnchors);
       cy.batch(() => cy.nodes().forEach((node) => {
         const position = positions[node.id()];
         if (position) node.position(position);
@@ -446,7 +480,8 @@
           .filter((edge) => !edge.hasClass("virtual-edge"))
           .map((edge) => ({ id: edge.id(), data: edge.data() })),
       },
-      [...expandedGroups]
+      [...expandedGroups],
+      groupAnchors
     );
     cy.batch(() => {
       cy.nodes().forEach((node) => {
@@ -587,6 +622,11 @@
   }
 
   export function relayout() {
+    if (mode === "grouped") {
+      // Explicit Auto layout resets manual group anchors.
+      groupAnchors = {};
+      savePreference(anchorsStorageKey(viewKey), {});
+    }
     runDagreLayout();
     debounceSaveLayout();
   }

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  anchorsStorageKey,
   buildGroupedGraph,
   groupNodeId,
   groupedLayoutPositions,
@@ -9,6 +10,7 @@ import {
   layoutStorageKey,
   presentationEdges,
   ungroupedNodeId,
+  validAnchors,
   visibleNodeIds,
 } from '../src/lib/grouping.js';
 
@@ -474,6 +476,108 @@ test('visible node ids reflect collapsed and expanded states', () => {
   assert.ok(expanded.has('apps-10'));
   assert.ok(expanded.has('apps-13'));
   assert.ok(!expanded.has('apps-11'));
+});
+
+test('dragged group anchors stay fixed across expand and collapse', () => {
+  const { filtered, grouping } = fixture();
+  const grouped = buildGroupedGraph(filtered, grouping);
+  const cardId = groupNodeId(1, 'betty');
+  const anchor = { x: 420, y: 640 };
+  const anchors = { [cardId]: anchor };
+  const ai = byId(grouped.nodes, cardId);
+
+  const collapsed = groupedLayoutPositions(grouped, [], anchors);
+  assert.deepEqual(collapsed[cardId], anchor);
+
+  const expanded = groupedLayoutPositions(grouped, [cardId], anchors);
+  assert.deepEqual(expanded[cardId], anchor);
+  for (const memberId of ai.data.memberIds) {
+    assert.ok(expanded[memberId].y > anchor.y);
+    assert.ok(Math.abs(expanded[memberId].x - anchor.x) <= 400);
+  }
+
+  assert.deepEqual(groupedLayoutPositions(grouped, [], anchors)[cardId], anchor);
+});
+
+test('expanding other groups does not move anchored groups', () => {
+  const { filtered, grouping } = fixture();
+  const grouped = buildGroupedGraph(filtered, grouping);
+  const anchoredId = groupNodeId(1, 'betty');
+  const otherId = groupNodeId(2, 'betty');
+  const anchors = { [anchoredId]: { x: -360, y: 560 } };
+
+  const before = groupedLayoutPositions(grouped, [], anchors);
+  const after = groupedLayoutPositions(grouped, [otherId], anchors);
+  assert.deepEqual(after[anchoredId], before[anchoredId]);
+});
+
+test('multiple anchored and expanded groups stay fixed and separated', () => {
+  const { filtered, grouping } = fixture();
+  const grouped = buildGroupedGraph(filtered, grouping);
+  const firstId = groupNodeId(1, 'betty');
+  const secondId = groupNodeId(2, 'betty');
+  const anchors = {
+    [firstId]: { x: -360, y: 620 },
+    [secondId]: { x: 360, y: 620 },
+  };
+  const positions = groupedLayoutPositions(grouped, [firstId, secondId], anchors);
+
+  assert.deepEqual(positions[firstId], anchors[firstId]);
+  assert.deepEqual(positions[secondId], anchors[secondId]);
+  for (const groupId of [firstId, secondId]) {
+    const group = byId(grouped.nodes, groupId);
+    for (const memberId of group.data.memberIds) {
+      assert.ok(positions[memberId].y > anchors[groupId].y);
+    }
+  }
+
+  const automatic = byId(grouped.nodes, groupNodeId(3, 'blackbox'));
+  const autoPosition = positions[automatic.data.id];
+  for (const groupId of [firstId, secondId]) {
+    const anchored = anchors[groupId];
+    const dx = Math.abs(autoPosition.x - anchored.x);
+    const dy = Math.abs(autoPosition.y - anchored.y);
+    assert.ok(dx >= 220 || dy >= 92, `automatic group overlaps ${groupId}`);
+  }
+});
+
+test('anchored positions survive reload and are not inferred from saved layouts', () => {
+  const { filtered, grouping } = fixture();
+  const grouped = buildGroupedGraph(filtered, grouping);
+  const cardId = groupNodeId(1, 'betty');
+  const anchors = { [cardId]: { x: 100, y: 700 } };
+
+  assert.deepEqual(groupedLayoutPositions(grouped, [], anchors)[cardId], anchors[cardId]);
+  assert.notDeepEqual(groupedLayoutPositions(grouped, [], {})[cardId], anchors[cardId]);
+  assert.equal(anchorsStorageKey('sig'), 'hlh.mapGroupAnchors.sig');
+  assert.notEqual(anchorsStorageKey('sig'), layoutStorageKey('grouped', 'sig'));
+  assert.deepEqual(
+    validAnchors({ ok: { x: 1, y: 2 }, bad: { x: 'nope', y: 2 }, missing: null }),
+    { ok: { x: 1, y: 2 } }
+  );
+});
+
+test('auto layout ignores explicit anchors', () => {
+  const { filtered, grouping } = fixture();
+  const grouped = buildGroupedGraph(filtered, grouping);
+  const cardId = groupNodeId(1, 'betty');
+  const anchored = groupedLayoutPositions(grouped, [], { [cardId]: { x: 900, y: 900 } });
+  const reset = groupedLayoutPositions(grouped, [], {});
+
+  assert.deepEqual(anchored[cardId], { x: 900, y: 900 });
+  assert.notDeepEqual(reset[cardId], anchored[cardId]);
+});
+
+test('stale layout ignores anchored expanded groups', () => {
+  const { filtered, grouping } = fixture();
+  const grouped = buildGroupedGraph(filtered, grouping);
+  const cardId = groupNodeId(1, 'betty');
+
+  assert.equal(hasStaleGroupedLayout(grouped, {}, [cardId], {}), true);
+  assert.equal(
+    hasStaleGroupedLayout(grouped, {}, [cardId], { [cardId]: { x: 0, y: 0 } }),
+    false
+  );
 });
 
 test('non-app inventory keeps its host association for layout', () => {
