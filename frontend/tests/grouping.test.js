@@ -238,6 +238,21 @@ test('repeated expansion states never leave duplicate or dangling edges', () => 
   }
 });
 
+test('group colour and icon propagate to the grouped presentation', () => {
+  const { filtered, grouping } = fixture();
+  const decorated = {
+    ...grouping,
+    groups: grouping.groups.map((group) =>
+      group.id === 1 ? { ...group, color: '#123456', icon: '\u2605' } : group
+    ),
+  };
+  const grouped = buildGroupedGraph(filtered, decorated);
+  const ai = byId(grouped.nodes, groupNodeId(1, 'betty'));
+
+  assert.equal(ai.data.groupColor, '#123456');
+  assert.match(ai.data.label, /^\u2605 AI/);
+});
+
 test('manual groups without a host are scoped by their members', () => {
   const { filtered } = fixture();
   const grouping = {

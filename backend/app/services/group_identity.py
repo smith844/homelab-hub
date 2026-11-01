@@ -98,6 +98,7 @@ def app_identities(session):
         result.append(
             {
                 "app_id": app.id,
+                "name": display_identity(app.name),
                 "host_key": host_key,
                 "host_label": host_label,
                 "container_key": container_key,

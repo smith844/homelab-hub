@@ -34,7 +34,7 @@
     cy.nodes().forEach((n) => n.style("color", textColor));
     cy.edges().forEach((e) => e.style("color", mutedColor));
     cy.nodes('[type="group"]').style("background-color", dark ? "#1f3a4d" : "#eef4f8");
-    cy.nodes('[type="group"]').style("border-color", dark ? "#74d2cb" : "#126e77");
+    cy.nodes('[type="group"]:not([groupColor])').style("border-color", dark ? "#74d2cb" : "#126e77");
   }
 
   async function loadNodeDetails(node) {
@@ -238,6 +238,13 @@
               "text-wrap": "wrap",
               "text-max-width": "190px",
               "text-margin-y": 0,
+            },
+          },
+          {
+            selector: "node[groupColor]",
+            style: {
+              "border-width": 3,
+              "border-color": "data(groupColor)",
             },
           },
           {

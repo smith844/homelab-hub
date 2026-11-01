@@ -110,6 +110,7 @@ export function buildGroupedGraph(filtered, grouping) {
         name: meta?.name || "Group",
         source: meta?.source || null,
         color: meta?.color || null,
+        icon: meta?.icon || null,
         sortOrder: meta?.sort_order ?? 0,
         hostKey: meta?.host_key || "",
         hostLabel: meta?.host_label || "",
@@ -242,7 +243,7 @@ export function buildGroupedGraph(filtered, grouping) {
         label:
           slot.kind === "ungrouped"
             ? `Ungrouped · ${host} · ${slot.total}`
-            : `${slot.name} · ${slot.total}`,
+            : `${slot.icon ? `${slot.icon} ` : ""}${slot.name} · ${slot.total}`,
         type: "group",
         kind: slot.kind,
         groupId: slot.groupId,
@@ -252,6 +253,7 @@ export function buildGroupedGraph(filtered, grouping) {
         hostNodeId,
         parentIds,
         color: slot.color,
+        ...(slot.color ? { groupColor: slot.color } : {}),
         sortOrder: slot.sortOrder,
         totalMembers: slot.total,
         visibleMembers: members.length,

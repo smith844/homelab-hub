@@ -1,6 +1,6 @@
 <script>
 import {location} from "svelte-spa-router";
-const groups=[{title:"WORKSPACE",items:[["/","Overview","◈"],["/map","Maps","⌘"],["/docs","Documentation","▤"]]},{title:"INVENTORY",items:[["/inventory/hardware","Hosts","▦"],["/inventory/vms","VMs & runtimes","◇"],["/inventory/apps","Applications","▧"],["/inventory/networks","Networks","◎"],["/inventory/storage","Storage & shares","▱"],["/inventory/misc","Other devices","⋯"]]},{title:"PREFERENCES",items:[["/settings","Settings","⚙"]]}];
+const groups=[{title:"WORKSPACE",items:[["/","Overview","◈"],["/map","Maps","⌘"],["/docs","Documentation","▤"]]},{title:"INVENTORY",items:[["/inventory/hardware","Hosts","▦"],["/inventory/vms","VMs & runtimes","◇"],["/inventory/apps","Applications","▧"],["/groups","Container groups","▥"],["/inventory/networks","Networks","◎"],["/inventory/storage","Storage & shares","▱"],["/inventory/misc","Other devices","⋯"]]},{title:"PREFERENCES",items:[["/settings","Settings","⚙"]]}];
 const active=p=>p==="/"?$location==="/":$location.startsWith(p);
 </script>
 <nav class="sidebar" aria-label="Main navigation">{#each groups as group}<div class="nav-group"><p>{group.title}</p>{#each group.items as [path,label,icon]}<a href={`#${path}`} class:active={active(path)} aria-current={active(path)?"page":undefined}><span aria-hidden="true">{icon}</span>{label}</a>{/each}</div>{/each}<div class="sidebar-note">A reference for your lab.<br/>Built to be returned to.</div></nav>

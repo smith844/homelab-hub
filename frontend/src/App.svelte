@@ -5,11 +5,13 @@
   import InventoryPage from "./pages/InventoryPage.svelte";
   import OverviewPage from "./pages/OverviewPage.svelte";
   import SettingsPage from "./pages/SettingsPage.svelte";
+  import GroupsPage from "./pages/GroupsPage.svelte";
   import Toast from "./components/Toast.svelte";
 
   const routes = {
     "/": OverviewPage,
     "/settings": SettingsPage,
+    "/groups": GroupsPage,
     "/inventory": InventoryPage,
     "/inventory/:type": InventoryPage,
     "/inventory/:type/:id": InventoryPage,
