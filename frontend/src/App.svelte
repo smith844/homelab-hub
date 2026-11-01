@@ -1,19 +1,22 @@
 <script>
   import Router from "svelte-spa-router";
+  import { wrap } from "svelte-spa-router/wrap";
   import Layout from "./components/Layout.svelte";
-  import DocsPage from "./pages/DocsPage.svelte";
   import InventoryPage from "./pages/InventoryPage.svelte";
-  import MapPage from "./pages/MapPage.svelte";
+  import OverviewPage from "./pages/OverviewPage.svelte";
+  import SettingsPage from "./pages/SettingsPage.svelte";
   import Toast from "./components/Toast.svelte";
 
   const routes = {
-    "/": InventoryPage,
+    "/": OverviewPage,
+    "/settings": SettingsPage,
     "/inventory": InventoryPage,
     "/inventory/:type": InventoryPage,
     "/inventory/:type/:id": InventoryPage,
-    "/map": MapPage,
-    "/docs": DocsPage,
-    "/docs/:id": DocsPage,
+    "/map": wrap({ asyncComponent: () => import("./pages/MapPage.svelte") }),
+    "/map/:root": wrap({ asyncComponent: () => import("./pages/MapPage.svelte") }),
+    "/docs": wrap({ asyncComponent: () => import("./pages/DocsPage.svelte") }),
+    "/docs/:id": wrap({ asyncComponent: () => import("./pages/DocsPage.svelte") }),
   };
 </script>
 

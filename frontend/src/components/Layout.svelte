@@ -1,5 +1,8 @@
 <script>
   import Sidebar from "./Sidebar.svelte";
+  import { siteName, theme } from "../lib/preferences.js";
+  import { location } from "svelte-spa-router";
+  $: document.title = `${$siteName || "Home Lab Hub"} · ${$location.startsWith("/map") ? "Maps" : $location.startsWith("/docs") ? "Documentation" : $location.startsWith("/settings") ? "Settings" : $location.startsWith("/inventory") ? "Inventory" : "Overview"}`;
 
   // In production (Docker), use relative URLs. In dev, use explicit URL for proxy.
   const API_BASE = import.meta.env.PROD ? '' : (import.meta.env.VITE_API_URL || 'http://localhost:5001');
@@ -40,6 +43,7 @@
     if (!file) return;
     
     try {
+      if (!confirm("Import replaces the existing inventory and documents. Have you saved an export?")) { event.target.value = ""; return; }
       const text = await file.text();
       const data = JSON.parse(text);
       
@@ -70,8 +74,9 @@
 
 <div class="layout">
   <header class="header">
-    <h1>Home Lab Hub</h1>
+    <a class="brand" href="#/"><img src="/favicon.svg" alt="" /><span><strong>{$siteName || "Home Lab Hub"}</strong><small>Infrastructure & knowledge</small></span></a>
     <div class="header-actions">
+      <button class="theme-button" aria-label="Toggle light and dark theme" on:click={() => theme.set($theme === "dark" ? "light" : "dark")}>{$theme === "dark" ? "Light" : "Dark"}</button>
       <button class="btn btn-primary" on:click={exportDatabase}>Export Data</button>
       <button class="btn btn-secondary" on:click={triggerImport}>Import Data</button>
       <input id="import-file-input" type="file" accept=".json" style="display: none;" on:change={importDatabase} />
@@ -87,6 +92,8 @@
 </div>
 
 <style>
+  .brand{display:flex;align-items:center;gap:.7rem;text-decoration:none;color:white}.brand img{width:38px;height:38px}.brand strong{display:block;font-size:1rem;color:white;line-height:1.3}.brand small{display:block;font-size:.6rem;color:#adc3d1}.theme-button{background:transparent;border:1px solid #536879;color:white;margin:0;padding:.4rem .7rem;font-size:.75rem}.main{min-width:0}.header{min-height:76px}.header-actions{align-items:center}.brand:focus-visible{outline:2px solid #78d6cc}@media(max-width:760px){.content{flex-direction:column}.header{flex-wrap:wrap;gap:.6rem;padding:.7rem 1rem!important}.main{padding:1rem!important}.btn{font-size:.7rem!important}.brand small{display:none}}
+
   .layout {
     display: flex;
     flex-direction: column;
@@ -94,17 +101,12 @@
   }
   
   .header {
-    background-color: #1a1d23;
+    background-color: #102d42;
     color: white;
     padding: 1rem 1.5rem;
     display: flex;
     justify-content: space-between;
     align-items: center;
-  }
-  
-  .header h1 {
-    margin: 0;
-    font-size: 1.5rem;
   }
   
   .header-actions {

@@ -1,11 +1,14 @@
 <script>
   import { onMount, onDestroy } from "svelte";
   import cytoscape from "cytoscape";
-  import dagre from "cytoscape-dagre";
-  import { get, put } from "../../lib/api.js";
+  import { get } from "../../lib/api.js";
   import { addToast } from "../../lib/stores.js";
 
-  cytoscape.use(dagre);
+  import { layoutPositions } from "../../lib/mapViews.js";
+  import { readPreference, savePreference } from "../../lib/preferences.js";
+  export let graphData = null;
+  export let viewKey = "all";
+  let disposed = false;
 
   let container;
   let cy;
@@ -16,14 +19,6 @@
   let loadingDetails = false;
   let tooltip = { visible: false, text: "", x: 0, y: 0 };
   
-  // Visibility toggles for each node type
-  let showHardware = true;
-  let showVms = true;
-  let showApps = true;
-  let showStorage = true;
-  let showShares = true;
-  let showMisc = true;
-
   async function loadNodeDetails(node) {
     if (!node) return;
     loadingDetails = true;
@@ -56,11 +51,12 @@
   onMount(async () => {
     try {
       const [graphRes, layoutRes, networksRes] = await Promise.all([
-        get("/map/graph"),
-        get("/map/layout"),
+        graphData ? Promise.resolve(graphData) : get("/map/graph"),
+        Promise.resolve({data: readPreference(`hlh.mapLayout.${viewKey}`, {})}),
         get("/map/networks"),
       ]);
 
+      if (disposed) return;
       const savedPositions = layoutRes.data || {};
       networks = networksRes.networks || [];
 
@@ -81,19 +77,20 @@
           {
             selector: "node",
             style: {
-              label: "data(label)",
-              "text-valign": "center",
+              label: node => node.data("rawName") || node.data("label"),
+              "text-margin-y": 10,
+              "text-valign": "bottom",
               "text-halign": "center",
-              "font-size": "7px",
+              "font-size": "11px",
               "font-weight": "400",
               "font-family": "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
-              "font-style": "italic",
+              "font-style": "normal",
               color: "#333",
               "text-outline-width": 0,
               width: 48,
               height: 48,
               "text-wrap": "wrap",
-              "text-max-width": "65px",
+              "text-max-width": "135px",
               "background-color": "#FFFFFF",
               "border-width": 2,
               "border-color": "#999",
@@ -104,7 +101,7 @@
           {
             selector: "node[icon]:not([imageIcon])",
             style: {
-              "font-size": "20px",
+              "font-size": "11px",
               "font-style": "normal",
               width: 52,
               height: 52,
@@ -121,7 +118,7 @@
               "background-height": "70%",
               width: 48,
               height: 48,
-              label: "",  // Hide label for image nodes
+              label: node => node.data("rawName") || node.data("label"),
             },
           },
           // Per-type styles
@@ -171,7 +168,7 @@
           },
         ],
         layout: { name: "preset" }, // Use saved positions first
-        minZoom: 0.2,
+        minZoom: 0.1,
         maxZoom: 3,
       });
 
@@ -180,6 +177,8 @@
       if (!hasSavedPositions && nodes.length > 0) {
         runDagreLayout();
       }
+
+      if (hasSavedPositions) readableView();
 
       // Persist positions on drag end
       cy.on("dragfree", "node", () => {
@@ -219,126 +218,27 @@
     }
   });
 
-  // Reactive statement to hide/show nodes by type
-  $: if (cy) {
-    const nodeTypes = [
-      { type: 'hardware', show: showHardware },
-      { type: 'vms', show: showVms },
-      { type: 'apps', show: showApps },
-      { type: 'storage', show: showStorage },
-      { type: 'shares', show: showShares },
-      { type: 'misc', show: showMisc }
-    ];
-    
-    nodeTypes.forEach(({ type, show }) => {
-      const nodes = cy.nodes(`[type="${type}"]`);
-      if (show) {
-        nodes.show();
-      } else {
-        nodes.hide();
-      }
-    });
-  }
-
   onDestroy(() => {
+    disposed = true;
     if (cy) cy.destroy();
     clearTimeout(saveTimeout);
   });
 
   function runDagreLayout() {
     if (!cy) return;
-    
-    // Run initial dagre layout to establish vertical positioning (hierarchy)
-    cy.layout({
-      name: "dagre",
-      rankDir: "TB",
-      nodeSep: 20,
-      rankSep: 100,
-      ranker: "network-simplex",
-      fit: false,
-      padding: 30,
-      animate: false,
-    }).run();
-    
-    // Separate misc nodes from the main tree structure
-    const miscNodes = cy.nodes().filter(node => node.data('type') === 'misc');
-    const mainNodes = cy.nodes().filter(node => node.data('type') !== 'misc');
-    
-    // Find root nodes in main tree (nodes with no incoming edges, excluding misc)
-    const roots = mainNodes
-      .filter(node => node.indegree(false) === 0)
-      .sort((a, b) => a.position().x - b.position().x);
-    
-    let nextX = 0;
-    const nodeSpacing = 70; // Horizontal space between leaf nodes
-    const subtreeGap = 50; // Gap between separate tree hierarchies
-    
-    // Depth-first layout: children are evenly spaced, parents centered above
-    function layoutSubtree(node) {
-      // Get direct children, sorted by their original position (excluding misc)
-      const children = node.outgoers('node')
-        .filter(n => n.data('type') !== 'misc')
-        .sort((a, b) => a.position().x - b.position().x);
-      
-      if (children.length === 0) {
-        // Leaf node - assign next available X position
-        const x = nextX;
-        nextX += nodeSpacing;
-        node.position({ x, y: node.position().y });
-        return x;
-      }
-      
-      // Recursively layout all children depth-first
-      const childXPositions = children.map(child => layoutSubtree(child));
-      
-      // Center this node over its children
-      const avgX = childXPositions.reduce((sum, x) => sum + x, 0) / childXPositions.length;
-      node.position({ x: avgX, y: node.position().y });
-      
-      return avgX;
+    const positions = layoutPositions({nodes: cy.nodes().map(n => ({data:n.data()})), edges: cy.edges().map(e => ({data:e.data()}))});
+    cy.batch(() => cy.nodes().forEach(node => node.position(positions[node.id()])));
+    readableView();
+  }
+  export function fitView() { if (cy) cy.fit(50); }
+  export function readableView() {
+    if (!cy || !cy.nodes().length) return;
+    cy.fit(65);
+    if (cy.zoom() < 0.65) {
+      cy.zoom(0.65);
+      const first = cy.nodes().sort((a,b) => a.position().y-b.position().y)[0];
+      cy.pan({x:cy.width()/2-first.position().x*cy.zoom(),y:90-first.position().y*cy.zoom()});
     }
-    
-    // Layout each root tree
-    roots.forEach((root, idx) => {
-      if (idx > 0) {
-        nextX += subtreeGap; // Add gap between separate trees
-      }
-      layoutSubtree(root);
-    });
-    
-    // Center the main tree in viewport
-    const mainX = mainNodes.map(n => n.position().x);
-    const minMainX = Math.min(...mainX);
-    const maxMainX = Math.max(...mainX);
-    const mainWidth = maxMainX - minMainX;
-    const centerShift = -(minMainX + maxMainX) / 2;
-    
-    mainNodes.forEach(node => {
-      const pos = node.position();
-      node.position({ x: pos.x + centerShift, y: pos.y });
-    });
-    
-    // Layout misc nodes on the right in a compact grid
-    if (miscNodes.length > 0) {
-      const miscGap = 100; // Gap between main tree and misc section
-      const miscStartX = maxMainX + centerShift + miscGap;
-      const miscSpacingX = 80;
-      const miscSpacingY = 80;
-      const miscColumns = 2; // Number of columns for misc nodes
-      
-      // Sort misc nodes by their original Y position to maintain some order
-      const sortedMisc = miscNodes.toArray().sort((a, b) => a.position().y - b.position().y);
-      
-      sortedMisc.forEach((node, idx) => {
-        const col = idx % miscColumns;
-        const row = Math.floor(idx / miscColumns);
-        const x = miscStartX + col * miscSpacingX;
-        const y = 100 + row * miscSpacingY; // Start from top
-        node.position({ x, y });
-      });
-    }
-    
-    cy.fit(50);
   }
 
   function debounceSaveLayout() {
@@ -354,7 +254,7 @@
       positions[node.id()] = { x: pos.x, y: pos.y, pinned: true };
     });
     try {
-      await put("/map/layout", { positions });
+      if (!savePreference(`hlh.mapLayout.${viewKey}`, positions)) addToast("Could not save map layout in this browser", "error");
     } catch (e) {
       // silent fail on layout save
     }
@@ -362,7 +262,7 @@
 
   export function relayout() {
     runDagreLayout();
-    setTimeout(saveLayout, 500);
+    debounceSaveLayout();
   }
 </script>
 
@@ -525,7 +425,7 @@
       {/if}
     </div>
     <div class="info-footer">
-      <a href="#/inventory/{selectedNode.type}" class="view-link">View in Inventory →</a>
+      <a href="#/inventory/{selectedNode.type}/{selectedNode.entity_id}" class="view-link">View in Inventory →</a>
     </div>
   </div>
 {/if}
@@ -548,35 +448,7 @@
     <p class="empty-state">No networks configured</p>
   {/if}
   
-  <div class="panel-divider"></div>
-  
-  <h3>Show Inventory</h3>
-  <div class="toggle-list">
-    <label class="toggle-option">
-      <input type="checkbox" bind:checked={showHardware} />
-      <span>Hardware</span>
-    </label>
-    <label class="toggle-option">
-      <input type="checkbox" bind:checked={showVms} />
-      <span>VMs</span>
-    </label>
-    <label class="toggle-option">
-      <input type="checkbox" bind:checked={showApps} />
-      <span>Apps</span>
-    </label>
-    <label class="toggle-option">
-      <input type="checkbox" bind:checked={showStorage} />
-      <span>Storage</span>
-    </label>
-    <label class="toggle-option">
-      <input type="checkbox" bind:checked={showShares} />
-      <span>Shares</span>
-    </label>
-    <label class="toggle-option">
-      <input type="checkbox" bind:checked={showMisc} />
-      <span>Misc</span>
-    </label>
-  </div>
+
 </div>
 
 <div class="legend">
@@ -626,13 +498,16 @@
     position: absolute;
     top: 0.75rem;
     left: 0.75rem;
-    background: rgba(0, 0, 0, 0.9);
+    background: var(--pico-card-background-color);
+    max-height: calc(100% - 1.5rem);
+    overflow-y: auto;
+    z-index: 10;
     padding: 0;
     border-radius: 6px;
     min-width: 280px;
     max-width: 350px;
-    color: #fff;
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: var(--pico-color);
+    border: 1px solid var(--pico-muted-border-color);
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
   }
   .info-header {
@@ -643,6 +518,7 @@
     border-bottom: 1px solid rgba(255, 255, 255, 0.1);
   }
   .info-header h3 {
+    color: var(--pico-color);
     margin: 0;
     font-size: 1rem;
     display: flex;
@@ -689,8 +565,9 @@
     gap: 0.3rem;
   }
   .info-item.notes .info-value {
+    white-space: pre-wrap;
     font-size: 0.85rem;
-    color: #ccc;
+    color: var(--pico-color);
     font-style: italic;
   }
   .info-label {
@@ -698,7 +575,8 @@
     font-weight: 500;
   }
   .info-value {
-    color: #fff;
+    color: var(--pico-color);
+    word-break: break-word;
     display: flex;
     align-items: center;
     gap: 0.5rem;
@@ -773,33 +651,6 @@
     color: #999;
     margin: 0;
     font-style: italic;
-  }
-  .panel-divider {
-    height: 1px;
-    background: rgba(255, 255, 255, 0.1);
-    margin: 0.75rem 0;
-  }
-  .toggle-list {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-    margin-top: 0.5rem;
-  }
-  .toggle-option {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    font-size: 0.85rem;
-    cursor: pointer;
-    color: #ccc;
-    margin: 0;
-  }
-  .toggle-option input[type="checkbox"] {
-    cursor: pointer;
-    margin: 0;
-  }
-  .toggle-option:hover {
-    color: #fff;
   }
   .legend {
     position: absolute;

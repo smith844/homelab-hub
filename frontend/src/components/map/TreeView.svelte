@@ -1,6 +1,8 @@
 <script>
   import { onMount } from "svelte";
   import { get } from "../../lib/api.js";
+  import { buildForest } from "../../lib/mapViews.js";
+  export let graphData = null;
   import TreeNode from "./TreeNode.svelte";
 
   let treeData = [];
@@ -17,47 +19,8 @@
   async function loadTreeData() {
     loading = true;
     try {
-      const graphRes = await get("/map/graph");
-      const nodes = graphRes.nodes || [];
-      const edges = graphRes.edges || [];
-      
-      // Build adjacency map
-      const childrenMap = new Map();
-      edges.forEach(edge => {
-        const parentId = edge.data.source;
-        const childId = edge.data.target;
-        if (!childrenMap.has(parentId)) {
-          childrenMap.set(parentId, []);
-        }
-        childrenMap.get(parentId).push(childId);
-      });
-
-      // Find root nodes (rank 0)
-      const rootNodes = nodes.filter(n => n.data.rank === 0);
-      
-      // Build tree structure
-      function buildTreeNode(nodeData) {
-        const node = nodes.find(n => n.data.id === nodeData.data.id);
-        const childIds = childrenMap.get(node.data.id) || [];
-        const children = childIds.map(childId => {
-          const childNode = nodes.find(n => n.data.id === childId);
-          return buildTreeNode(childNode);
-        });
-        
-        return {
-          id: node.data.id,
-          label: node.data.rawName || node.data.label,
-          type: node.data.type,
-          icon: node.data.icon,
-          imageIcon: node.data.imageIcon,
-          networkColor: node.data.networkColor,
-          networkName: node.data.networkName,
-          entity_id: node.data.entity_id,
-          children
-        };
-      }
-
-      treeData = rootNodes.map(buildTreeNode);
+      const graphRes = graphData || await get("/map/graph");
+      treeData = buildForest(graphRes);
     } catch (e) {
       console.error('Failed to load tree data:', e);
     }
@@ -288,7 +251,7 @@
           {/if}
         </div>
         <div class="info-footer">
-          <a href="#/inventory/{selectedNode.type}" class="view-link">View in Inventory →</a>
+          <a href="#/inventory/{selectedNode.type}/{selectedNode.entity_id}" class="view-link">View in Inventory →</a>
         </div>
       </div>
     {/if}
@@ -332,16 +295,16 @@
   }
   
   .info-panel {
-    position: fixed;
-    top: 200px;
-    right: 20px;
+    position: absolute;
+    top: 10px;
+    right: 10px;
     width: 320px;
     background: var(--pico-card-background-color, #1e1e2e);
     border: 1px solid var(--pico-muted-border-color, #333);
     border-radius: 8px;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
     z-index: 1000;
-    max-height: calc(100vh - 240px);
+    max-height: calc(100% - 20px);
     display: flex;
     flex-direction: column;
   }
@@ -412,8 +375,9 @@
   }
   
   .info-value {
+    white-space: pre-wrap;
     font-size: 0.9rem;
-    color: #ffffff;
+    color: var(--pico-color, #25384a);
     word-break: break-word;
     display: flex;
     align-items: center;

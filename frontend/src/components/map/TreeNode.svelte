@@ -159,7 +159,7 @@
   
   .node-label {
     font-weight: 500;
-    color: #ffffff;
+    color: var(--pico-color, #25384a);
     font-size: 1rem;
   }
   

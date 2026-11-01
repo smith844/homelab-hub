@@ -1,0 +1,15 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {filterGraph,buildForest,layoutPositions,TYPES} from '../src/lib/mapViews.js';
+const node=(id,type,name=id)=>({data:{id,type,rawName:name}});
+const edge=(source,target,manual=false)=>({data:{source,target,manual}});
+const graph={nodes:[node('h1','hardware','Betty'),node('h2','hardware','Blackbox'),node('v1','vms','Docker'),node('a1','apps','Open WebUI'),node('a2','apps','Ollama'),node('s1','storage'),node('m1','misc')],edges:[edge('h1','v1'),edge('v1','a1'),edge('h2','a2'),edge('h1','s1'),edge('a1','a2',true),edge('a2','a1',true)]};
+test('host scope follows placement, not dependencies across hosts',()=>assert.deepEqual(filterGraph(graph,{root:'h1'}).nodes.map(n=>n.data.id),['h1','v1','a1','s1']));
+test('type filter retains placement ancestors as context',()=>{const g=filterGraph(graph,{root:'h1',types:['apps']});assert.equal(g.matches,1);assert.deepEqual(g.nodes.map(n=>n.data.id),['h1','v1','a1']);assert.equal(g.nodes[0].data.context,true);});
+test('search retains the matching application and parent path',()=>assert.deepEqual(filterGraph(graph,{query:'webui'}).nodes.map(n=>n.data.id),['h1','v1','a1']));
+test('empty types produces empty graph',()=>assert.equal(filterGraph(graph,{types:[]}).nodes.length,0));
+test('custom membership crosses hosts without duplicating records',()=>{const g=filterGraph(graph,{root:'h1',members:['a1','a2','a1','missing']});assert.equal(g.nodes.length,2);assert.equal(g.edges.length,2);});
+test('depth limits descendants',()=>assert.deepEqual(filterGraph(graph,{root:'h1',depth:'1'}).nodes.map(n=>n.data.id),['h1','v1','s1']));
+test('tree includes orphan/misc nodes and handles dependency cycles',()=>{const trees=buildForest(graph);assert.deepEqual(trees.map(n=>n.id),['h1','h2','m1']);assert.equal(trees[0].children[0].children[0].label,'Open WebUI');});
+test('large app layers wrap to multiple rows',()=>{const g={nodes:[node('h','hardware'),...Array.from({length:84},(_,i)=>node(`a${i}`,'apps'))],edges:Array.from({length:84},(_,i)=>edge('h',`a${i}`))};const positions=layoutPositions(g);assert.equal(Object.keys(positions).length,85);const app=Object.entries(positions).filter(([id])=>id!=='h').map(([,p])=>p);assert.equal(new Set(app.map(p=>p.y)).size,11);assert.ok(Math.max(...app.map(p=>p.x))-Math.min(...app.map(p=>p.x))<=1120);});
+test('invalid root safely returns empty graph',()=>assert.equal(filterGraph(graph,{root:'missing'}).nodes.length,0));
