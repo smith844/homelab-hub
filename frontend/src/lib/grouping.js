@@ -23,10 +23,11 @@ export function layoutStorageKey(mode, viewKey) {
 
 const CARD_WIDTH = 220;
 const CARD_HEIGHT = 92;
+const CARD_GAP = 40;
 const MEMBER_PITCH = 170;
 const MEMBER_ROW = 150;
-const SLOT_GAP = 40;
-const MAX_ROW_WIDTH = 1600;
+const MAX_ROW_WIDTH = 1300;
+const LANE_GAP = 80;
 const OTHER_PITCH = 200;
 const HOST_GAP = 280;
 
@@ -43,11 +44,15 @@ function hostKeyOfHardware(node) {
   return identityKey(node?.data?.rawName || node?.data?.label);
 }
 
+function sortByLabel(a, b) {
+  return labelOf(a).localeCompare(labelOf(b)) || a.data.id.localeCompare(b.data.id);
+}
+
 /**
  * Build a grouped presentation graph from the already-filtered map graph and
- * the effective grouping payload. Real node ids/positions are preserved;
- * virtual group nodes are added. Topology edges are not rewritten here:
- * aggregate edges are produced separately for the current expansion state.
+ * the effective grouping payload. Real node ids/data are preserved; virtual
+ * group nodes are added. Topology edges keep their original endpoints and are
+ * flagged as placement or relationship edges.
  */
 export function buildGroupedGraph(filtered, grouping) {
   const sourceNodes = filtered?.nodes || [];
@@ -74,14 +79,9 @@ export function buildGroupedGraph(filtered, grouping) {
   };
 
   const groupMeta = new Map(
-    (grouping?.groups || []).map((group) => [
-      `${group.id}@${group.host_key}`,
-      group,
-    ])
+    (grouping?.groups || []).map((group) => [`${group.id}@${group.host_key}`, group])
   );
-  const groupById = new Map(
-    (grouping?.groups || []).map((group) => [group.id, group])
-  );
+  const groupById = new Map((grouping?.groups || []).map((group) => [group.id, group]));
 
   const slots = new Map();
   const ensureSlot = (key, meta) => {
@@ -104,21 +104,23 @@ export function buildGroupedGraph(filtered, grouping) {
     return slots.get(key);
   };
 
+  const groupMetaFor = (key, groupId, hostKey, hostLabelValue) =>
+    groupMeta.get(key) ||
+    groupById.get(groupId) || {
+      id: groupId,
+      host_key: hostKey,
+      host_label: hostLabelValue,
+      name: `Group ${groupId}`,
+    };
+
   const appSlot = new Map();
   for (const membership of grouping?.memberships || []) {
     const key = `${membership.group_id}@${membership.host_key}`;
     const slot = ensureSlot(
       key,
-      groupMeta.get(key) ||
-        groupById.get(membership.group_id) || {
-          id: membership.group_id,
-          host_key: membership.host_key,
-          host_label: membership.host_label,
-          name: `Group ${membership.group_id}`,
-        }
+      groupMetaFor(key, membership.group_id, membership.host_key, membership.host_label)
     );
-    // Manual groups have no host of their own; scope their virtual cards by
-    // the host of their members.
+    // Manual groups have no host of their own; scope their cards by member host.
     slot.hostKey = slot.hostKey || membership.host_key;
     slot.hostLabel = slot.hostLabel || membership.host_label || "";
     slot.total += 1;
@@ -128,13 +130,7 @@ export function buildGroupedGraph(filtered, grouping) {
     const key = `${entry.group_id}@${entry.host_key}`;
     const slot = ensureSlot(
       key,
-      groupMeta.get(key) ||
-        groupById.get(entry.group_id) || {
-          id: entry.group_id,
-          host_key: entry.host_key,
-          host_label: entry.host_label,
-          name: `Group ${entry.group_id}`,
-        }
+      groupMetaFor(key, entry.group_id, entry.host_key, entry.host_label)
     );
     slot.hostKey = slot.hostKey || entry.host_key;
     slot.hostLabel = slot.hostLabel || entry.host_label || "";
@@ -162,16 +158,24 @@ export function buildGroupedGraph(filtered, grouping) {
     const slot = slots.get(key);
     slot.members.push(node);
     node.data.groupKey = key;
-    node.data.groupNodeId = slot.kind === "ungrouped"
-      ? ungroupedNodeId(slot.hostKey)
-      : groupNodeId(slot.groupId, slot.hostKey);
+    node.data.groupNodeId =
+      slot.kind === "ungrouped"
+        ? ungroupedNodeId(slot.hostKey)
+        : groupNodeId(slot.groupId, slot.hostKey);
   }
 
-  // Annotate non-grouped nodes with their root hardware host for layout.
+  // Flag placement (hierarchy) edges and resolve each node's placement parent.
+  const placement = placementEdges({ nodes, edges });
+  const placementSet = new Set(placement);
   const parentOf = new Map();
-  for (const edge of placementEdges({ nodes, edges })) {
+  for (const edge of placement) {
+    edge.data.placement = true;
     if (!parentOf.has(edge.data.target)) parentOf.set(edge.data.target, edge.data.source);
   }
+  for (const edge of edges) {
+    if (!placementSet.has(edge)) edge.data.placement = false;
+  }
+
   const hostForNode = (id, seen = new Set()) => {
     const node = byId.get(id);
     if (!node) return "";
@@ -181,12 +185,15 @@ export function buildGroupedGraph(filtered, grouping) {
     const parent = parentOf.get(id);
     return parent ? hostForNode(parent, seen) : "";
   };
+
   for (const node of nodes) {
+    node.data.placementParentId = parentOf.get(node.data.id) || null;
     if (node.data.type === "group") continue;
     if (node.data.groupKey) continue;
-    node.data.hostKey = node.data.type === "hardware"
-      ? hostKeyOfHardware(node)
-      : node.data.hostKey ?? hostForNode(node.data.id);
+    node.data.hostKey =
+      node.data.type === "hardware"
+        ? hostKeyOfHardware(node)
+        : node.data.hostKey ?? hostForNode(node.data.id);
   }
 
   const groupNodes = [];
@@ -195,25 +202,38 @@ export function buildGroupedGraph(filtered, grouping) {
     // groups whose matched members were removed by filters.
     const onlyUnmatched = slot.total > 0 && slot.unmatchedLabels.length === slot.total;
     if (!slot.members.length && !onlyUnmatched) continue;
-    const members = [...slot.members].sort(
-      (a, b) => labelOf(a).localeCompare(labelOf(b)) || a.data.id.localeCompare(b.data.id)
-    );
-    const id = slot.kind === "ungrouped"
-      ? ungroupedNodeId(slot.hostKey)
-      : groupNodeId(slot.groupId, slot.hostKey);
+
+    const members = [...slot.members].sort(sortByLabel);
+    const parentIds = [
+      ...new Set(
+        members
+          .map((member) => member.data.placementParentId)
+          .filter((id) => id && byId.has(id))
+      ),
+    ];
+    const hardware = hardwareByHost.get(slot.hostKey);
+    const hostNodeId = hardware?.data.id || null;
+    const id =
+      slot.kind === "ungrouped"
+        ? ungroupedNodeId(slot.hostKey)
+        : groupNodeId(slot.groupId, slot.hostKey);
     const host = hostLabel(slot.hostKey, slot.hostLabel);
+
     groupNodes.push({
       data: {
         id,
-        label: slot.kind === "ungrouped"
-          ? `Ungrouped · ${host} · ${slot.total}`
-          : `${slot.name} · ${slot.total}`,
+        label:
+          slot.kind === "ungrouped"
+            ? `Ungrouped · ${host} · ${slot.total}`
+            : `${slot.name} · ${slot.total}`,
         type: "group",
         kind: slot.kind,
         groupId: slot.groupId,
         source: slot.source,
         hostKey: slot.hostKey,
         hostLabel: host,
+        hostNodeId,
+        parentIds,
         color: slot.color,
         sortOrder: slot.sortOrder,
         totalMembers: slot.total,
@@ -237,14 +257,56 @@ export function buildGroupedGraph(filtered, grouping) {
 }
 
 /**
- * Aggregate topology edges for the current expansion state. Edges touching a
- * hidden member are rerouted to its group node; internal edges disappear and
- * duplicate group-to-node connections are collapsed into one edge.
+ * Presentation-only edges for the current expansion state.
+ *
+ * - parent -> group edges are always present (Docker/VM -> category)
+ * - group -> member edges exist while the group is expanded
+ * - placement edges into grouped members are hidden (replaced by the chain)
+ * - other topology edges stay visible or aggregate onto collapsed groups
+ *
+ * Returns `{ virtual, hiddenEdgeIds }`; `hiddenEdgeIds` contains real topology
+ * edge ids that must not be drawn.
  */
-export function aggregateEdges(grouped, expandedGroupIds = []) {
+/**
+ * Node ids that are visible for a given expansion state (collapsed members are
+ * hidden). Mirrors the visibility classes used by the Cytoscape component and is
+ * used by tests for the visible-element Fit all behaviour.
+ */
+export function visibleNodeIds(grouped, expandedGroupIds = []) {
   const expanded = new Set(expandedGroupIds);
-  const byId = new Map((grouped?.nodes || []).map((node) => [node.data.id, node]));
+  const ids = new Set();
+  for (const node of grouped?.nodes || []) {
+    const groupId = node.data.groupNodeId;
+    if (groupId && !expanded.has(groupId)) continue;
+    ids.add(node.data.id);
+  }
+  return ids;
+}
 
+/**
+ * True when a saved Grouped layout does not cover the currently expanded
+ * members (for example, it was saved while those groups were collapsed). In
+ * that case the component recomputes the grouped layout instead of mixing
+ * stale card positions with newly expanded members.
+ */
+export function hasStaleGroupedLayout(grouped, savedPositions = {}, expandedGroupIds = []) {
+  const expanded = new Set(expandedGroupIds);
+  return (grouped?.nodes || []).some((node) => {
+    const groupId = node.data.groupNodeId;
+    return Boolean(groupId) && expanded.has(groupId) && !savedPositions[node.data.id];
+  });
+}
+
+export function presentationEdges(grouped, expandedGroupIds = []) {
+  const expanded = new Set(expandedGroupIds);
+  const nodes = grouped?.nodes || [];
+  const byId = new Map(nodes.map((node) => [node.data.id, node]));
+
+  const isHiddenMember = (id) => {
+    const node = byId.get(id);
+    const groupId = node?.data?.groupNodeId;
+    return Boolean(groupId) && !expanded.has(groupId);
+  };
   const representation = (id) => {
     const node = byId.get(id);
     const groupId = node?.data?.groupNodeId;
@@ -252,147 +314,251 @@ export function aggregateEdges(grouped, expandedGroupIds = []) {
     return id;
   };
 
-  const result = [];
-  const seen = new Set();
+  const hiddenEdgeIds = new Set();
+  const virtual = [];
+  const virtualByKey = new Map();
+
+  const addVirtual = (key, source, target, kind) => {
+    if (!source || !target || source === target) return;
+    if (!byId.has(source) || !byId.has(target)) return;
+    if (virtualByKey.has(key)) return;
+    const edge = { data: { id: key, source, target, kind } };
+    virtualByKey.set(key, edge);
+    virtual.push(edge);
+  };
+
   for (const edge of grouped?.edges || []) {
-    const source = representation(edge.data.source);
-    const target = representation(edge.data.target);
-    if (!source || !target || source === target) continue;
-    if (source === edge.data.source && target === edge.data.target) continue;
-    const key = source < target ? `${source}|${target}` : `${target}|${source}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    result.push({
-      data: { id: `agg-${key}`, source, target, aggregate: true },
-    });
+    const edgeId = edge.id ?? edge.data?.id;
+    const source = edge.data.source;
+    const target = edge.data.target;
+
+    if (edge.data.placement) {
+      // Placement edges into a grouped member are replaced by
+      // parent -> group -> member; never draw them directly.
+      if (
+        byId.get(source)?.data?.groupNodeId ||
+        byId.get(target)?.data?.groupNodeId
+      ) {
+        hiddenEdgeIds.add(edgeId);
+        continue;
+      }
+    }
+
+    const sourceHidden = isHiddenMember(source);
+    const targetHidden = isHiddenMember(target);
+    if (sourceHidden || targetHidden) {
+      hiddenEdgeIds.add(edgeId);
+      if (!edge.data.placement) {
+        const repSource = representation(source);
+        const repTarget = representation(target);
+        addVirtual(`vagg-${repSource}|${repTarget}`, repSource, repTarget, "aggregate");
+      }
+    }
   }
-  return result;
+
+  for (const node of nodes) {
+    if (node.data.type !== "group") continue;
+    const parents = (node.data.parentIds || []).filter((id) => byId.has(id));
+    if (!parents.length && node.data.hostNodeId && byId.has(node.data.hostNodeId)) {
+      parents.push(node.data.hostNodeId);
+    }
+    for (const parent of parents) {
+      addVirtual(`vgp-${parent}-${node.data.id}`, parent, node.data.id, "group-parent");
+    }
+    if (expanded.has(node.data.id)) {
+      for (const memberId of node.data.memberIds || []) {
+        addVirtual(`vgm-${node.data.id}-${memberId}`, node.data.id, memberId, "group-member");
+      }
+    }
+  }
+
+  return { virtual, hiddenEdgeIds: [...hiddenEdgeIds] };
+}
+
+function buildLane(groups, expanded, byId) {
+  const rows = [];
+  let row = { width: 0, height: 0, items: [] };
+
+  for (const group of groups) {
+    const members = expanded.has(group.data.id)
+      ? (group.data.memberIds || []).map((id) => byId.get(id)).filter(Boolean)
+      : [];
+    const columns = members.length ? memberColumns(members.length) : 1;
+    const slotWidth = members.length
+      ? Math.max(CARD_WIDTH, columns * MEMBER_PITCH)
+      : CARD_WIDTH;
+    const memberRows = members.length ? Math.ceil(members.length / columns) : 0;
+    const slotHeight = CARD_HEIGHT + (memberRows ? 80 + memberRows * MEMBER_ROW : 0);
+
+    if (row.items.length && row.width + CARD_GAP + slotWidth > MAX_ROW_WIDTH) {
+      rows.push(row);
+      row = { width: 0, height: 0, items: [] };
+    }
+    const x = row.items.length ? row.width + CARD_GAP : 0;
+    row.items.push({ group, members, columns, slotWidth, memberRows, x });
+    row.width = x + slotWidth;
+    row.height = Math.max(row.height, slotHeight);
+  }
+  if (row.items.length) rows.push(row);
+
+  const width = rows.length ? Math.max(...rows.map((item) => item.width)) : 0;
+  const positions = {};
+  let y = 0;
+  for (const currentRow of rows) {
+    for (const item of currentRow.items) {
+      const cardX = -width / 2 + item.x + item.slotWidth / 2;
+      positions[item.group.data.id] = { x: cardX, y: y + CARD_HEIGHT / 2 };
+      if (item.members.length) {
+        const visibleColumns = Math.min(item.columns, item.members.length);
+        item.members.forEach((member, index) => {
+          const column = index % item.columns;
+          const rowIndex = Math.floor(index / item.columns);
+          positions[member.data.id] = {
+            x: cardX + (column - (visibleColumns - 1) / 2) * MEMBER_PITCH,
+            y: y + CARD_HEIGHT + 80 + rowIndex * MEMBER_ROW,
+          };
+        });
+      }
+    }
+    y += currentRow.height + CARD_GAP;
+  }
+
+  return {
+    width,
+    height: rows.length ? y - CARD_GAP : 0,
+    positions,
+  };
 }
 
 /**
  * Deterministic layout for Grouped mode.
  *
- * Each hardware host gets a vertical band: the host node, followed by any
- * non-grouped inventory (VMs, storage, ...), then group cards packed into
- * shelves. Member nodes sit in a grid directly beneath their group card. Space
- * for members is reserved even while a group is collapsed so expanding never
- * moves existing nodes.
+ * Collapsed groups are packed as a compact card grid under their Docker/VM
+ * parent; expanding a group reserves a member grid beneath its card and
+ * re-flows the surrounding cards. Hosts are stacked, so Betty and Blackbox
+ * never share a lane.
  */
-export function groupedLayoutPositions(grouped) {
+export function groupedLayoutPositions(grouped, expandedGroupIds = []) {
+  const expanded = new Set(expandedGroupIds);
   const nodes = grouped?.nodes || [];
   const byId = new Map(nodes.map((node) => [node.data.id, node]));
   const positions = {};
 
-  const blocks = new Map();
-  const ensureBlock = (hostKey) => {
-    if (!blocks.has(hostKey)) {
-      blocks.set(hostKey, { hostKey, hardware: null, groups: [], loose: [] });
-    }
-    return blocks.get(hostKey);
-  };
+  const hosts = nodes.filter((node) => node.data.type === "hardware");
+  const groups = nodes.filter((node) => node.data.type === "group");
+  const loose = nodes.filter(
+    (node) =>
+      node.data.type !== "hardware" &&
+      node.data.type !== "group" &&
+      !node.data.groupNodeId
+  );
 
-  for (const node of nodes) {
-    if (node.data.type === "hardware") {
-      ensureBlock(hostKeyOfHardware(node)).hardware = node;
-    } else if (node.data.type === "group") {
-      ensureBlock(node.data.hostKey || "").groups.push(node);
-    } else if (!node.data.groupNodeId) {
-      ensureBlock(node.data.hostKey || "").loose.push(node);
-    }
-  }
+  const hostKeys = new Set([
+    ...hosts.map(hostKeyOfHardware),
+    ...groups.map((group) => group.data.hostKey || ""),
+    ...loose.map((node) => node.data.hostKey || ""),
+  ]);
 
-  const hostKeys = [...blocks.keys()].sort((a, b) => a.localeCompare(b));
   let nextHostY = 0;
+  for (const hostKey of [...hostKeys].sort((a, b) => a.localeCompare(b))) {
+    const top = nextHostY;
+    const hostNode = hosts.find((node) => hostKeyOfHardware(node) === hostKey) || null;
+    const blockGroups = groups.filter((group) => (group.data.hostKey || "") === hostKey);
+    const blockLoose = loose.filter((node) => (node.data.hostKey || "") === hostKey);
 
-  for (const hostKey of hostKeys) {
-    const block = blocks.get(hostKey);
-    block.loose.sort(
-      (a, b) =>
-        String(a.data.type).localeCompare(String(b.data.type)) ||
-        labelOf(a).localeCompare(labelOf(b)) ||
-        a.data.id.localeCompare(b.data.id)
-    );
-    block.groups.sort(
-      (a, b) =>
-        (a.data.kind === "ungrouped" ? 1 : 0) -
-          (b.data.kind === "ungrouped" ? 1 : 0) ||
-        (a.data.sortOrder ?? 0) - (b.data.sortOrder ?? 0) ||
-        labelOf(a).localeCompare(labelOf(b)) ||
-        a.data.id.localeCompare(b.data.id)
-    );
-
-    let cursorY = nextHostY;
-    if (block.hardware) {
-      positions[block.hardware.data.id] = { x: 0, y: cursorY };
-      cursorY += 120;
+    const lanesByParent = new Map();
+    for (const group of blockGroups) {
+      const primary =
+        (group.data.parentIds || []).find((id) => byId.has(id)) ||
+        (group.data.hostNodeId && byId.has(group.data.hostNodeId)
+          ? group.data.hostNodeId
+          : "__host__");
+      if (!lanesByParent.has(primary)) lanesByParent.set(primary, []);
+      lanesByParent.get(primary).push(group);
     }
-    if (block.loose.length) {
-      const width = (block.loose.length - 1) * OTHER_PITCH;
-      block.loose.forEach((node, index) => {
-        positions[node.data.id] = {
-          x: -width / 2 + index * OTHER_PITCH,
-          y: cursorY,
+
+    const lanes = [...lanesByParent.entries()]
+      .map(([parentId, laneGroups]) => {
+        const parent = byId.get(parentId) || null;
+        return {
+          parentId,
+          parent,
+          groups: laneGroups.sort(
+            (a, b) =>
+              (a.data.kind === "ungrouped" ? 1 : 0) -
+                (b.data.kind === "ungrouped" ? 1 : 0) ||
+              (a.data.sortOrder ?? 0) - (b.data.sortOrder ?? 0) ||
+              sortByLabel(a, b)
+          ),
         };
+      })
+      .sort((a, b) => {
+        if (a.parentId === "__host__") return 1;
+        if (b.parentId === "__host__") return -1;
+        return labelOf(a.parent).localeCompare(labelOf(b.parent)) ||
+          a.parentId.localeCompare(b.parentId);
       });
-      cursorY += 170;
+
+    const laneLayouts = lanes.map((lane) => ({
+      ...lane,
+      layout: buildLane(lane.groups, expanded, byId),
+    }));
+    const totalLaneWidth =
+      laneLayouts.reduce((sum, lane) => sum + lane.layout.width, 0) +
+      Math.max(0, laneLayouts.length - 1) * LANE_GAP;
+
+    let laneLeft = -totalLaneWidth / 2;
+    let blockBottom = 0;
+    for (const lane of laneLayouts) {
+      const laneCenter = laneLeft + lane.layout.width / 2;
+      const parentIsHost =
+        !lane.parent ||
+        lane.parent.data.type === "hardware" ||
+        lane.parentId === "__host__";
+      if (!parentIsHost) {
+        positions[lane.parent.data.id] = { x: laneCenter, y: top + 140 };
+      }
+      const laneTop = top + (parentIsHost ? 220 : 320);
+      for (const [id, position] of Object.entries(lane.layout.positions)) {
+        positions[id] = {
+          x: laneCenter + position.x,
+          y: laneTop + position.y,
+        };
+      }
+      blockBottom = Math.max(blockBottom, laneTop + lane.layout.height);
+      laneLeft += lane.layout.width + LANE_GAP;
     }
 
-    let index = 0;
-    while (index < block.groups.length) {
-      const row = [];
-      let rowWidth = 0;
-      while (index < block.groups.length) {
-        const group = block.groups[index];
-        const members = (group.data.memberIds || [])
-          .map((id) => byId.get(id))
-          .filter(Boolean);
-        const columns = memberColumns(members.length);
-        const slotWidth = Math.max(CARD_WIDTH, columns * MEMBER_PITCH);
-        if (row.length && rowWidth + slotWidth + SLOT_GAP > MAX_ROW_WIDTH) break;
-        row.push({ group, members, columns, slotWidth });
-        rowWidth += slotWidth + (row.length > 1 ? SLOT_GAP : 0);
-        index += 1;
-      }
-
-      let maxRows = 0;
-      for (const item of row) {
-        const rows = Math.ceil(item.members.length / item.columns) || 0;
-        maxRows = Math.max(maxRows, rows);
-      }
-
-      let x = -rowWidth / 2;
-      for (const item of row) {
-        const cardX = x + item.slotWidth / 2;
-        positions[item.group.data.id] = { x: cardX, y: cursorY + CARD_HEIGHT / 2 };
-        const visibleColumns = Math.min(item.columns, item.members.length) || 1;
-        const rows = Math.ceil(item.members.length / item.columns) || 0;
-        item.members.forEach((member, memberIndex) => {
-          const column = memberIndex % item.columns;
-          const rowIndex = Math.floor(memberIndex / item.columns);
-          positions[member.data.id] = {
-            x:
-              cardX +
-              (column - (visibleColumns - 1) / 2) * MEMBER_PITCH,
-            y: cursorY + CARD_HEIGHT + 80 + rowIndex * MEMBER_ROW,
+    const remainingLoose = blockLoose.filter((node) => !positions[node.data.id]);
+    if (remainingLoose.length) {
+      const looseY = blockBottom ? blockBottom + 120 : top + 180;
+      const width = (remainingLoose.length - 1) * OTHER_PITCH;
+      remainingLoose
+        .sort((a, b) => String(a.data.type).localeCompare(String(b.data.type)) || sortByLabel(a, b))
+        .forEach((node, index) => {
+          positions[node.data.id] = {
+            x: -width / 2 + index * OTHER_PITCH,
+            y: looseY,
           };
         });
-        if (rows) maxRows = Math.max(maxRows, rows);
-        x += item.slotWidth + SLOT_GAP;
-      }
-
-      cursorY +=
-        CARD_HEIGHT + (maxRows ? maxRows * MEMBER_ROW + 80 : 40) + SLOT_GAP;
+      blockBottom = Math.max(blockBottom, looseY - top + 40);
     }
 
-    nextHostY = cursorY + HOST_GAP;
+    if (hostNode) {
+      positions[hostNode.data.id] = { x: 0, y: top };
+    }
+
+    nextHostY = top + Math.max(blockBottom, 200) + HOST_GAP;
   }
 
-  // Safety net: any node that did not fit a block gets a deterministic slot.
+  // Fallback for visible nodes that did not fit a lane (e.g. orphan inventory).
   let fallbackY = nextHostY;
   for (const node of nodes) {
     if (positions[node.data.id]) continue;
+    if (node.data.type === "apps" && node.data.groupNodeId) continue; // collapsed member
     positions[node.data.id] = { x: 0, y: fallbackY };
     fallbackY += 140;
   }
+
   return positions;
 }

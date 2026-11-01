@@ -6,7 +6,7 @@
   import { theme, readPreference, savePreference } from "../../lib/preferences.js";
 
   import { layoutPositions, layoutMissingPositions, validSavedPositions, ROW_GAP } from "../../lib/mapViews.js";
-  import { aggregateEdges, groupedLayoutPositions, layoutStorageKey } from "../../lib/grouping.js";
+  import { groupedLayoutPositions, hasStaleGroupedLayout, layoutStorageKey, presentationEdges } from "../../lib/grouping.js";
   export let graphData = null;
   export let viewKey = "all";
   export let mode = "graph";
@@ -85,13 +85,15 @@
       );
       // Only finite saved coordinates are applied or counted as saved.
       const savedPositions = validSavedPositions(layoutRes.data);
+      const staleGroupedLayout = mode === "grouped" &&
+        hasStaleGroupedLayout(graphRes, savedPositions, [...expandedGroups]);
       const missingPositions = mode === "grouped" ? {} : layoutMissingPositions(graphRes, savedPositions);
-      const groupedPositions = mode === "grouped" ? groupedLayoutPositions(graphRes) : {};
+      const groupedPositions = mode === "grouped" ? groupedLayoutPositions(graphRes, [...expandedGroups]) : {};
       networks = networksRes.networks || [];
 
       // Apply saved positions; only nodes without one are placed automatically.
       const nodes = graphRes.nodes.map((n) => {
-        const saved = savedPositions[n.data.id];
+        const saved = staleGroupedLayout ? null : savedPositions[n.data.id];
         if (saved) {
           n.position = { x: saved.x, y: saved.y };
           // Don't lock nodes - they should always be draggable
@@ -236,6 +238,30 @@
             },
           },
           {
+            selector: "edge.group-parent-edge",
+            style: {
+              width: 2,
+              "line-color": "#9aa7b4",
+              "target-arrow-shape": "triangle",
+              "target-arrow-color": "#9aa7b4",
+              "curve-style": "bezier",
+              label: "",
+            },
+          },
+          {
+            selector: "edge.group-member-edge",
+            style: {
+              width: 2,
+              "line-style": "dashed",
+              "line-color": "#b6c2cf",
+              "target-arrow-shape": "triangle",
+              "target-arrow-color": "#b6c2cf",
+              "curve-style": "bezier",
+              opacity: 0.9,
+              label: "",
+            },
+          },
+          {
             selector: ".group-hidden-edge",
             style: {
               display: "none",
@@ -259,6 +285,7 @@
       const hasSavedPositions = nodes.some((n) => savedPositions[n.data.id]);
       if (mode === "grouped") {
         applyGroupState();
+        refreshGroupEdges();
         readableView();
       } else if (!hasSavedPositions && nodes.length > 0) {
         runDagreLayout();
@@ -328,9 +355,9 @@
       const positions = groupedLayoutPositions({
         nodes: cy.nodes().map((n) => ({ id: n.id(), data: n.data() })),
         edges: cy.edges()
-          .filter((e) => !e.hasClass("aggregate-edge"))
+          .filter((e) => !e.hasClass("virtual-edge"))
           .map((e) => ({ id: e.id(), data: e.data() })),
-      });
+      }, [...expandedGroups]);
       cy.batch(() => cy.nodes().forEach((node) => {
         const position = positions[node.id()];
         if (position) node.position(position);
@@ -357,6 +384,29 @@
     const visible = visibleElements();
     const nodes = visible.filter((element) => element.isNode());
     if (!nodes.length) return;
+
+    if (mode === "grouped") {
+      // Prioritise the host + category cards for the initial readable overview.
+      const focus = nodes.filter(
+        (node) => node.data("type") === "hardware" || node.data("type") === "group"
+      );
+      const target = focus.length ? focus : nodes;
+      cy.fit(target, 60);
+      if (cy.zoom() >= READABLE_ZOOM) return;
+      cy.zoom(READABLE_ZOOM);
+      const zoom = cy.zoom();
+      const bb = target.boundingBox();
+      const w = cy.width(), h = cy.height();
+      const minPanX = w - zoom * bb.x2 - VIEW_MARGIN, maxPanX = -zoom * bb.x1 + VIEW_MARGIN;
+      const minPanY = h - zoom * bb.y2 - VIEW_MARGIN, maxPanY = -zoom * bb.y1 + VIEW_MARGIN;
+      let panX = w / 2 - zoom * (bb.x1 + bb.x2) / 2;
+      let panY = VIEW_MARGIN - zoom * bb.y1;
+      panX = minPanX > maxPanX ? (w - zoom * (bb.x1 + bb.x2)) / 2 : Math.min(Math.max(panX, minPanX), maxPanX);
+      panY = minPanY > maxPanY ? (h - zoom * (bb.y1 + bb.y2)) / 2 : Math.min(Math.max(panY, minPanY), maxPanY);
+      cy.pan({ x: panX, y: panY });
+      return;
+    }
+
     cy.fit(visible, 40);
     if (cy.zoom() >= READABLE_ZOOM) return;
     cy.zoom(READABLE_ZOOM);
@@ -385,28 +435,73 @@
         if (member.length) member.toggleClass("group-hidden", !expanded);
       });
     });
-    refreshGroupEdges();
+  }
+
+  function reapplyGroupedLayout() {
+    if (!cy || mode !== "grouped") return;
+    const positions = groupedLayoutPositions(
+      {
+        nodes: cy.nodes().map((node) => ({ id: node.id(), data: node.data() })),
+        edges: cy.edges()
+          .filter((edge) => !edge.hasClass("virtual-edge"))
+          .map((edge) => ({ id: edge.id(), data: edge.data() })),
+      },
+      [...expandedGroups]
+    );
+    cy.batch(() => {
+      cy.nodes().forEach((node) => {
+        const position = positions[node.id()];
+        if (position) node.position(position);
+      });
+    });
   }
 
   function refreshGroupEdges() {
     if (!cy || mode !== "grouped") return;
-    cy.edges().filter((edge) => !edge.hasClass("aggregate-edge")).forEach((edge) => {
-      const hidden = edge.source().hasClass("group-hidden") || edge.target().hasClass("group-hidden");
-      edge.toggleClass("group-hidden-edge", hidden);
-    });
-    cy.remove(cy.edges(".aggregate-edge"));
     const grouped = {
       nodes: cy.nodes().map((node) => ({ id: node.id(), data: node.data() })),
       edges: cy.edges()
-        .filter((edge) => !edge.hasClass("aggregate-edge"))
+        .filter((edge) => !edge.hasClass("virtual-edge"))
         .map((edge) => ({ id: edge.id(), data: edge.data() })),
     };
-    const additions = aggregateEdges(grouped, [...expandedGroups]);
-    if (additions.length) {
+    const { virtual, hiddenEdgeIds } = presentationEdges(grouped, [...expandedGroups]);
+    const hidden = new Set(hiddenEdgeIds);
+
+    cy.edges()
+      .filter((edge) => !edge.hasClass("virtual-edge"))
+      .forEach((edge) => {
+        edge.toggleClass("group-hidden-edge", hidden.has(edge.id()));
+      });
+
+    cy.remove(cy.edges(".virtual-edge"));
+    if (virtual.length) {
+      const classes = {
+        "group-parent": "group-parent-edge",
+        "group-member": "group-member-edge",
+        aggregate: "aggregate-edge",
+      };
       cy.batch(() => {
-        additions.forEach((element) => cy.add(element).addClass("aggregate-edge"));
+        virtual.forEach((element) => {
+          const edge = cy.add({ group: "edges", data: element.data });
+          edge
+            .addClass("virtual-edge")
+            .addClass(classes[element.data.kind] || "aggregate-edge");
+        });
       });
     }
+  }
+
+  function ensureGroupVisible(group) {
+    if (!cy || !group) return;
+    const position = group.renderedPosition();
+    const margin = 80;
+    const w = cy.width(), h = cy.height();
+    let dx = 0, dy = 0;
+    if (position.x < margin) dx = margin - position.x;
+    else if (position.x > w - margin) dx = (w - margin) - position.x;
+    if (position.y < margin) dy = margin - position.y;
+    else if (position.y > h - margin) dy = (h - margin) - position.y;
+    if (dx || dy) cy.pan({ x: cy.pan().x + dx, y: cy.pan().y + dy });
   }
 
   function toggleGroup(group) {
@@ -416,6 +511,8 @@
     else expandedGroups.add(id);
     savePreference(GROUP_STATE_KEY, [...expandedGroups]);
     applyGroupState();
+    reapplyGroupedLayout();
+    refreshGroupEdges();
     if (selectedNode && selectedNode.type === "group" && selectedNode.id === id) {
       selectedNode = { ...group.data() };
     }
@@ -425,6 +522,7 @@
         selectedNode = null;
       }
     }
+    ensureGroupVisible(group);
     applyEdgeHighlight(selectedNode ? selectedNode.id : null);
   }
 
@@ -436,10 +534,17 @@
   function applyEdgeHighlight(nodeId) {
     if (!cy) return;
     const edges = cy.edges();
+    const colorOf = (edge) => {
+      if (edge.hasClass("group-parent-edge")) return "#9aa7b4";
+      if (edge.hasClass("group-member-edge")) return "#b6c2cf";
+      if (edge.hasClass("aggregate-edge")) return "#9aa7b4";
+      return "#666";
+    };
+    const isVirtual = (edge) => edge.hasClass("virtual-edge");
     const reset = (edge) => {
       edge.style("width", 2);
-      edge.style("line-color", edge.hasClass("aggregate-edge") ? "#9aa7b4" : "#666");
-      edge.style("opacity", edge.hasClass("aggregate-edge") ? 0.75 : 1);
+      edge.style("line-color", colorOf(edge));
+      edge.style("opacity", isVirtual(edge) ? 0.75 : 1);
     };
     if (!nodeId) {
       edges.forEach(reset);
@@ -452,15 +557,10 @@
     }
     edges.forEach((e) => {
       const active = connected.has(e.id());
-      if (e.hasClass("aggregate-edge")) {
-        e.style("width", active ? 3 : 2);
-        e.style("line-color", "#9aa7b4");
-        e.style("opacity", active ? 1 : 0.5);
-        return;
-      }
-      e.style("width", active ? 3 : 1);
-      e.style("line-color", active ? "#888" : "#999");
-      e.style("opacity", active ? 1 : 0.25);
+      const virtual = isVirtual(e);
+      e.style("width", active ? 3 : virtual ? 2 : 1);
+      e.style("line-color", active ? colorOf(e) : virtual ? colorOf(e) : "#999");
+      e.style("opacity", active ? 1 : virtual ? 0.65 : 0.25);
     });
   }
 
@@ -473,6 +573,9 @@
     if (!cy) return;
     const positions = {};
     cy.nodes().forEach((node) => {
+      // Do not persist hidden (collapsed member) positions: they are laid out
+      // again when the group is expanded.
+      if (mode === "grouped" && node.hasClass("group-hidden")) return;
       const pos = node.position();
       positions[node.id()] = { x: pos.x, y: pos.y, pinned: true };
     });
