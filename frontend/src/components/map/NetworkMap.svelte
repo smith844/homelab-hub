@@ -3,9 +3,9 @@
   import cytoscape from "cytoscape";
   import { get } from "../../lib/api.js";
   import { addToast } from "../../lib/stores.js";
+  import { theme, readPreference, savePreference } from "../../lib/preferences.js";
 
   import { layoutPositions } from "../../lib/mapViews.js";
-  import { readPreference, savePreference } from "../../lib/preferences.js";
   export let graphData = null;
   export let viewKey = "all";
   let disposed = false;
@@ -19,6 +19,13 @@
   let loadingDetails = false;
   let tooltip = { visible: false, text: "", x: 0, y: 0 };
   
+  $: if (cy) {
+    const textColor = $theme === "dark" ? "#e3ecf4" : "#25384a";
+    const mutedColor = $theme === "dark" ? "#a5b6c7" : "#637487";
+    cy.nodes().forEach((n) => n.style("color", textColor));
+    cy.edges().forEach((e) => e.style("color", mutedColor));
+  }
+
   async function loadNodeDetails(node) {
     if (!node) return;
     loadingDetails = true;
@@ -42,7 +49,7 @@
   const NODE_STYLES = {
     hardware:  { shape: "hexagon",          color: "#C5E1F5" },  // Pastel blue
     vms:       { shape: "ellipse",          color: "#C8E6C9" },  // Pastel green
-    apps:      { shape: "round-rectangle", color: "#FFE0B2" },  // Pastel orange
+    apps:      { shape: "round-rectangle", color: "#FFE0B2", width: 64, height: 64 },  // Pastel orange
     storage:   { shape: "barrel",           color: "#E1BEE7" },  // Pastel purple
     shares:    { shape: "round-tag",        color: "#FFF9C4" },  // Pastel yellow
     misc:      { shape: "diamond",          color: "#E0E0E0" },  // Light gray
@@ -81,16 +88,15 @@
               "text-margin-y": 10,
               "text-valign": "bottom",
               "text-halign": "center",
-              "font-size": "11px",
+              "font-size": "14px",
               "font-weight": "400",
               "font-family": "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
               "font-style": "normal",
-              color: "#333",
               "text-outline-width": 0,
               width: 48,
               height: 48,
               "text-wrap": "wrap",
-              "text-max-width": "135px",
+              "text-max-width": "160px",
               "background-color": "#FFFFFF",
               "border-width": 2,
               "border-color": "#999",
@@ -101,10 +107,10 @@
           {
             selector: "node[icon]:not([imageIcon])",
             style: {
-              "font-size": "11px",
+              "font-size": "14px",
               "font-style": "normal",
-              width: 52,
-              height: 52,
+              width: 64,
+              height: 64,
             },
           },
           // Nodes with image icons - use background image
@@ -116,8 +122,8 @@
               "background-clip": "none",
               "background-width": "70%",
               "background-height": "70%",
-              width: 48,
-              height: 48,
+              width: 64,
+              height: 64,
               label: node => node.data("rawName") || node.data("label"),
             },
           },
@@ -189,12 +195,14 @@
       cy.on("tap", "node", (evt) => {
         const node = evt.target;
         selectedNode = node.data();
+        applyEdgeHighlight(selectedNode.id);
       });
 
       // Deselect when clicking background
       cy.on("tap", (evt) => {
         if (evt.target === cy) {
           selectedNode = null;
+          applyEdgeHighlight(null);
         }
       });
 
@@ -241,6 +249,30 @@
     }
   }
 
+  function applyEdgeHighlight(nodeId) {
+    if (!cy) return;
+    const edges = cy.edges();
+    if (!nodeId) {
+      edges.forEach((e) => {
+        e.style("width", 2);
+        e.style("line-color", "#666");
+        e.style("opacity", 1);
+      });
+      return;
+    }
+    const connected = new Set();
+    const node = cy.getElementById(nodeId);
+    if (node) {
+      node.connectedEdges().forEach((e) => connected.add(e.id()));
+    }
+    edges.forEach((e) => {
+      const active = connected.has(e.id());
+      e.style("width", active ? 3 : 1);
+      e.style("line-color", active ? "#888" : "#999");
+      e.style("opacity", active ? 1 : 0.25);
+    });
+  }
+
   function debounceSaveLayout() {
     clearTimeout(saveTimeout);
     saveTimeout = setTimeout(saveLayout, 500);
@@ -283,7 +315,7 @@
         {/if}
         {selectedNode.rawName || selectedNode.label}
       </h3>
-      <button class="close-btn" on:click={() => selectedNode = null}>×</button>
+      <button class="close-btn" on:click={() => { selectedNode = null; applyEdgeHighlight(null); }}>×</button>
     </div>
     <div class="info-content">
       <div class="info-item">
