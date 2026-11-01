@@ -515,7 +515,7 @@
     justify-content: space-between;
     align-items: center;
     padding: 0.75rem 1rem;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    border-bottom: 1px solid var(--pico-muted-border-color, #333);
   }
   .info-header h3 {
     color: var(--pico-color);
@@ -531,7 +531,7 @@
   .close-btn {
     background: transparent;
     border: none;
-    color: #999;
+    color: var(--pico-muted-color, #999);
     font-size: 1.5rem;
     cursor: pointer;
     padding: 0;
@@ -544,8 +544,8 @@
     transition: all 0.2s;
   }
   .close-btn:hover {
-    background: rgba(255, 255, 255, 0.1);
-    color: #fff;
+    background: var(--pico-muted-border-color, rgba(128, 128, 128, 0.25));
+    color: var(--pico-color, #fff);
   }
   .info-content {
     padding: 1rem;
@@ -571,7 +571,7 @@
     font-style: italic;
   }
   .info-label {
-    color: #999;
+    color: var(--pico-muted-color, #999);
     font-weight: 500;
   }
   .info-value {
@@ -590,7 +590,7 @@
   }
   .info-footer {
     padding: 0.75rem 1rem;
-    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    border-top: 1px solid var(--pico-muted-border-color, #333);
   }
   .view-link {
     color: var(--pico-primary, #6366f1);
@@ -606,18 +606,19 @@
     position: absolute;
     top: 0.75rem;
     right: 0.75rem;
-    background: rgba(0, 0, 0, 0.8);
+    background: var(--pico-card-background-color, #1e1e2e);
     padding: 0.75rem;
     border-radius: 6px;
     min-width: 200px;
     max-width: 300px;
-    color: #fff;
+    color: var(--pico-color, #fff);
+    border: 1px solid var(--pico-muted-border-color, #333);
   }
   .networks-panel h3 {
     margin: 0 0 0.75rem 0;
     font-size: 0.9rem;
-    color: #ccc;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    color: var(--pico-color, #ccc);
+    border-bottom: 1px solid var(--pico-muted-border-color, #333);
     padding-bottom: 0.5rem;
   }
   .network-list {
@@ -636,7 +637,7 @@
     height: 16px;
     border-radius: 3px;
     flex-shrink: 0;
-    border: 1px solid rgba(255, 255, 255, 0.2);
+    border: 1px solid var(--pico-muted-border-color, rgba(128, 128, 128, 0.4));
   }
   .network-name {
     flex: 1;
@@ -644,11 +645,11 @@
   }
   .network-vlan {
     font-size: 0.75rem;
-    color: #999;
+    color: var(--pico-muted-color, #999);
   }
   .empty-state {
     font-size: 0.8rem;
-    color: #999;
+    color: var(--pico-muted-color, #999);
     margin: 0;
     font-style: italic;
   }
@@ -658,11 +659,12 @@
     left: 0.75rem;
     display: flex;
     gap: 1rem;
-    background: rgba(0, 0, 0, 0.7);
+    background: var(--pico-card-background-color, #1e1e2e);
     padding: 0.6rem 1rem;
     border-radius: 8px;
     font-size: 0.9rem;
-    color: #ddd;
+    color: var(--pico-color, #ddd);
+    border: 1px solid var(--pico-muted-border-color, #333);
   }
   .legend-item {
     display: flex;
@@ -674,8 +676,8 @@
   }
   .node-tooltip {
     position: absolute;
-    background: rgba(0, 0, 0, 0.9);
-    color: #fff;
+    background: var(--pico-card-background-color, #1e1e2e);
+    color: var(--pico-color, #fff);
     padding: 0.4rem 0.7rem;
     border-radius: 4px;
     font-size: 0.85rem;
@@ -684,5 +686,6 @@
     white-space: nowrap;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
     transform: translate(0, -50%);
+    border: 1px solid var(--pico-muted-border-color, #333);
   }
 </style>
