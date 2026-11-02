@@ -12,6 +12,7 @@
     "/": OverviewPage,
     "/settings": SettingsPage,
     "/groups": GroupsPage,
+    "/reconciliation": wrap({ asyncComponent: () => import("./pages/ReconciliationPage.svelte") }),
     "/inventory": InventoryPage,
     "/inventory/:type": InventoryPage,
     "/inventory/:type/:id": InventoryPage,

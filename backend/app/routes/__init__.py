@@ -25,3 +25,5 @@ def register_blueprints(app):
     app.register_blueprint(inventory_bp)
     app.register_blueprint(map_bp)
     app.register_blueprint(container_groups_bp)
+    from .reconciliation import bp as reconciliation_bp
+    app.register_blueprint(reconciliation_bp)

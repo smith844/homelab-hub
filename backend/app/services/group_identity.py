@@ -11,6 +11,8 @@ uses the Docker container name recorded in the scanner snapshot when available.
 
 import re
 
+from .discovery_identity import discovery_metadata
+
 STANDALONE_HOST_KEY = ""
 
 _WHITESPACE_RE = re.compile(r"\s+")
@@ -39,12 +41,16 @@ def identity_pair(value):
 def docker_container_name(app):
     """Return the recorded Docker container name, or ``None`` for non-Docker apps.
 
-    Only the scanner's structured Docker snapshot is trusted: a notes block that
+    An explicitly reviewed reconciliation marker takes precedence and survives
+    ordinary inventory backups. Otherwise only structured Docker snapshots count: a notes block that
     identifies itself as Docker configuration (``## Docker configuration``) with
     a ``Container: <name>`` entry, or an explicit ``Docker container: <name>``
     description. Unrelated notes/descriptions fall through to ``None`` so
     ordinary apps are not mistaken for Docker containers.
     """
+    linked = discovery_metadata(app.notes).get("container_name")
+    if linked and linked.strip():
+        return linked.strip()
     notes = app.notes or ""
     if _DOCKER_SECTION_RE.search(notes):
         match = _CONTAINER_LINE_RE.search(notes)
