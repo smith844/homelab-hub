@@ -1,5 +1,10 @@
 # Container group management — Phase 3 implementation report
 
+> Historical implementation/validation report. Branch states, deployment guidance and
+> test counts below describe that development cycle; the changes are now committed
+> on the development branch. Use [the current handover](HOMELAB-HUB-HANDOVER.md) and
+> [AGENTS.md](../AGENTS.md) for current state, workflow and deployment approvals.
+
 - **Project:** HomeLab-Hub (`smith844/homelab-hub` fork)
 - **Branch:** `feature/homelab-redesign`
 - **Base revision:** `1992ca2 Preserve grouped map positions and add expanded workspace`

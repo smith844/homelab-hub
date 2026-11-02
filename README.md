@@ -1,5 +1,10 @@
 # Home Lab Hub
 
+> **Fork development:** use [AGENTS.md](AGENTS.md) and the
+> [current HomeLab-Hub handover](docs/HOMELAB-HUB-HANDOVER.md) for
+> `feature/homelab-redesign`, reconciliation and Betty deployment safeguards.
+> The upstream compose example below is not the Betty test deployment procedure.
+
 A self-hosted web application for managing and visualizing home lab infrastructure. Track hardware, virtual machines, applications, storage, networks, and more — all in one place.
 
 ![Home Lab Hub Screenshot](docs/screenshot.png)

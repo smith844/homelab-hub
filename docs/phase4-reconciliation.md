@@ -2,8 +2,22 @@
 
 Open **Reconciliation** (`#/reconciliation`) and choose the root hardware host.
 Without a snapshot, FolderView and ungrouped counts are investigation targets;
-missing scan data never marks applications absent. Betty's reported seven/eleven
-entries have not been inspected or modified during development.
+missing scan data never marks applications absent. The first implementation is
+committed as `e1e595b`; it did not access either Betty installation.
+
+## Owner-verified Betty comparison (handover update)
+
+The owner reports **92 Docker containers**, **84 inventory matches**, **eight
+unmatched** (one current redesign container, six retained rollback containers and
+one separate network scanner), and **zero inventory applications without a
+discovered container match**. Most inventory entries do not yet record container/
+image IDs. These are point-in-time owner-verified results, not live agent probes.
+The earlier seven FolderView gaps and eleven ungrouped apps are separate grouping
+investigation targets; do not conflate their counts with the eight Docker resources.
+Do not automatically add all eight or delete retained backups. See the
+[current handover](HOMELAB-HUB-HANDOVER.md) for workflow, deployment safeguards and
+next priorities: read-only Docker collection, reviewed bulk metadata apply,
+persistent exclusions, existing-scanner integration and dashboard filtering.
 
 ## Verified existing scanner
 
@@ -84,4 +98,4 @@ network-resource mutation or trusted live transport yet. Next integration work i
 an authenticated read-only transport for the existing scanner and a separately
 verified all-container collector/export (including Docker-in-VM host provenance).
 This also determines how Betty and Blackbox produce authoritative container data;
-network probing alone cannot supply it. Neither Betty installation was accessed.
+network probing alone cannot supply it. No deployment or live collection is authorized by these instructions.

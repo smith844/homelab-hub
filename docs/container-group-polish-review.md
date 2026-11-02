@@ -1,5 +1,10 @@
 # Container group polish — review notes
 
+> Historical implementation/validation report. Branch states, deployment guidance and
+> test counts below describe that development cycle; the changes are now committed
+> on the development branch. Use [the current handover](HOMELAB-HUB-HANDOVER.md) and
+> [AGENTS.md](../AGENTS.md) for current state, workflow and deployment approvals.
+
 Changes are prepared on `fix/container-group-polish`, based on `feature/homelab-redesign` at `cce1db8`.
 No deployment, Betty connection, live database access, or port-8000 operation was performed.
 
