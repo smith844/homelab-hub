@@ -76,6 +76,12 @@ Coverage/success are uploaded declarations, not independently verified live prob
 Newer recorded observations block older snapshots from regressing metadata or
 claiming current absence. Unrecorded/non-Docker services remain unknown.
 
+The separate host-side exporter [`scripts/docker-snapshot.sh`](../scripts/docker-snapshot.sh)
+writes this contract from the Docker CLI and is documented in
+[docker-snapshot-exporter.md](docker-snapshot-exporter.md). It runs outside the web
+app, never imports or applies changes, and emits explicit failed evidence rather
+than a falsely complete snapshot.
+
 ## Review and apply
 
 Comparison/previews are read-only. Preview one addition, matched metadata update
@@ -95,7 +101,8 @@ assignments, group IDs and browser map anchor/layout keys are not rewritten.
 
 Snapshots are page-local; there is no persisted scan history, automatic refresh,
 network-resource mutation or trusted live transport yet. Next integration work is
-an authenticated read-only transport for the existing scanner and a separately
-verified all-container collector/export (including Docker-in-VM host provenance).
-This also determines how Betty and Blackbox produce authoritative container data;
-network probing alone cannot supply it. No deployment or live collection is authorized by these instructions.
+an authenticated read-only transport for the existing scanner and optional
+scheduling/reviewed orchestration of the Docker exporter (including Docker-in-VM
+host provenance). This also determines how Betty and Blackbox produce authoritative
+container data; network probing alone cannot supply it. No deployment or live
+collection is authorized by these instructions.

@@ -33,6 +33,8 @@ observations with inventory and offers reviewed container changes.
   when upgrading existing tables.
 - No Docker socket, network scanner or infrastructure credentials are required by
   the web app. There is no automatic Docker collector or background scan scheduler.
+  A separate host-side exporter (`scripts/docker-snapshot.sh`) produces the uploaded
+  container snapshot contract; it is not wired into the app or scheduled.
 - Reconciliation consumes uploaded JSON. It does not contact Betty or the separate
   scanner, start scans, or execute scanner import endpoints.
 - Group and reconciliation writes require the shared admin token. Legacy inventory,
@@ -54,6 +56,7 @@ observations with inventory and offers reviewed container changes.
 | Maps | `pages/MapPage.svelte`, `components/map/NetworkMap.svelte`, `TreeView.svelte`, `TreeNode.svelte` |
 | Map logic/icons/theme | `frontend/src/lib/grouping.js`, `mapViews.js`, `groupIcons.js`, `frontend/src/theme.css` |
 | Tests | `backend/tests/`, `frontend/tests/`, `frontend/tests/browser/` |
+| Docker snapshot exporter | `scripts/docker-snapshot.sh`, `docs/docker-snapshot-exporter.md` |
 | Test deployment | `scripts/deploy-betty-test.sh` |
 
 Backend paths in this table are relative to `backend/app/` unless shown otherwise.
@@ -326,18 +329,23 @@ Do not request live infrastructure secrets for ordinary unit/browser tests.
 
 Last full recorded functional validation at `e1e595b` (not rerun for this docs-only
 handover): **106 backend tests, 50 frontend tests, 10 Chromium checks**, production
-frontend build and isolated local API/SPA smoke checks passed. Backend validation
-used Python 3.12 and Node 24; production Dockerfile uses Python 3.14. Existing
-warnings: SQLAlchemy identity-map warning in inventory import; MapPage chunk >500 kB.
+frontend build and isolated local API/SPA smoke checks passed. The Docker exporter
+change was validated with **120 backend tests** (14 new exporter tests, including
+real `normalise_snapshot` compatibility) and did not modify frontend code.
+Backend validation used Python 3.12 and Node 24; production Dockerfile uses Python
+3.14. Existing warnings: SQLAlchemy identity-map warning in inventory import;
+MapPage chunk >500 kB.
 
 ## Next development priorities
 
-1. **Automated read-only Docker snapshot collection.** Start with a host-side or
-   separately approved collector that emits the existing v1 contract. Include all
-   containers (stopped/rollback ones too), real completion times, names and IDs;
-   emit failed/partial evidence on errors rather than a falsely complete empty
-   result. Whitelist metadata; never export environment credentials. Keep Docker
-   socket privileges out of the web app. Preserve physical-host/VM provenance for
+1. **Automated read-only Docker snapshot collection.** The host-side exporter is
+   delivered as `scripts/docker-snapshot.sh` (see
+   [its documentation](docker-snapshot-exporter.md)): it emits the complete v1
+   contract from `docker ps --all` plus `docker inspect`, includes stopped/rollback
+   containers and real completion times, whitelists metadata, and writes explicit
+   failed evidence on errors. Remaining work is optional scheduling and reviewed
+   transport/orchestration; the exporter is not deployed or scheduled, and the web
+   app still has no Docker socket. Preserve physical-host/VM provenance for
    Betty/Unraid and Blackbox/Proxmox. Developing a collector is not deployment approval.
 2. **Reviewed bulk reconciliation of discovered metadata.** Preview the 84 matched
    records' missing observations separately from actual ID changes; preserve custom
@@ -355,10 +363,11 @@ warnings: SQLAlchemy identity-map warning in inventory import; MapPage chunk >50
    genuinely changed IDs, expected operational/excluded containers, duplicates,
    stale/unknown evidence and grouping gaps. Persisted scan history is not yet present.
 
-Recommended first DeepSeek task: implement and test the **read-only Docker snapshot
-exporter** against fixtures and the current adapter contract, with no live deployment,
-web Docker socket access or automatic apply. Use the 92/84/eight/zero baseline for
-acceptance planning; do not hard-code these changing counts into application logic.
+Recommended next tasks: reviewed **bulk** reconciliation of recorded container/image
+metadata (previewed separately from actual changes), persistent host-scoped
+exclusions for deployment backup containers, and smaller dashboard summaries.
+Use the 92/84/eight/zero baseline for acceptance planning; do not hard-code these
+changing counts into application logic.
 
 ## Supporting documentation
 
