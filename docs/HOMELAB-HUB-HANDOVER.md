@@ -63,6 +63,7 @@ observations with inventory and offers reviewed container changes.
 | Tests | `backend/tests/`, `frontend/tests/`, `frontend/tests/browser/` |
 | Docker snapshot exporter | `scripts/docker-snapshot.sh`, `docs/docker-snapshot-exporter.md` |
 | Test deployment | `scripts/deploy-betty-test.sh` |
+| Test scanner deployment | `scripts/deploy-betty-test-scanner.sh`, `docs/scanner-betty-test-deployment.md` |
 
 Backend paths in this table are relative to `backend/app/` unless shown otherwise.
 
@@ -279,19 +280,41 @@ application separate.
 | Deployment script | `scripts/deploy-betty-test.sh` |
 | Active test container | `homelab-hub-redesign` |
 | Private env location | `/mnt/cache/appdata/homelab-hub-redesign-config/phase3.env` (never commit contents) |
+| Scanner test env | `/mnt/cache/appdata/homelab-hub-redesign-config/scanner-test.env` (mode 600, shared token/ranges) |
+| Scanner deployment | `scripts/deploy-betty-test-scanner.sh` (test scanner only) |
+| Test scanner | `homelab-hub-nmap-test` on private bridge `homelab-hub-nmap-test-net`; no published port |
+| Existing scanner | `homelab-hub-scanner` — never replace or modify |
 | FolderView input | `/boot/config/plugins/folderview.plus/docker.json`, mounted read-only |
 | Original installation | **Host port 8000: never modify** |
+
+The test web container joins `homelab-hub-nmap-test-net` and reaches the scanner by
+Docker DNS at `http://homelab-hub-nmap-test:8791`. The scanner publishes no host port,
+receives only `NET_RAW` (all other capabilities dropped), uses a read-only root
+filesystem and has no Docker socket. The scanner has outbound NAT access to approved
+private targets. MAC/vendor discovery may be unavailable over a bridge; this is the
+deliberate minimum-privilege first test. See
+[scanner-betty-test-deployment.md](scanner-betty-test-deployment.md) for the exact
+token-generation, deployment, verification and first-scan sequence.
 
 The test mapping is host **8790** → container-internal 8000. That does not authorize
 any operation on the original host-port-8000 installation. Do not deploy automatically:
 obtain explicit approval for the actual deployment, even though a script exists.
 
 On Betty, only after approval, use `bash scripts/deploy-betty-test.sh` from the source
-checkout. It validates branch/paths/private env permissions and test port, fast-forwards
-source, builds a revision-tagged image, takes an **online SQLite backup using Python's
-backup API**, checks its integrity, retains the stopped previous container with restart
-disabled, starts the new test container and health-checks it. It does not delete older
-rollback containers or automatically restore a database on failure.
+checkout. It validates branch/paths/private env permissions and test port, ensures the
+private scanner bridge, optionally verifies the running test scanner and shared env,
+fast-forwards source, builds a revision-tagged image, takes an **online SQLite backup
+using Python's backup API**, checks its integrity, retains the stopped previous
+container with restart disabled, starts the new test container on the private bridge
+and health-checks both the application and web-to-scanner connectivity. It does not
+delete older rollback containers, publish scanner port 8791 or automatically restore
+a database on failure. A missing `scanner-test.env` keeps the prior behavior with
+network discovery disabled.
+
+The separate idempotent `scripts/deploy-betty-test-scanner.sh` builds and replaces
+only `homelab-hub-nmap-test`, verifies health and refuses published ports. It does not
+touch `homelab-hub-scanner`, the port-8000 installation, databases or Docker networks
+other than the dedicated test bridge.
 
 Backups are retained in the data directory with names such as
 `homelab-hub-before-<revision>-<UTC timestamp>.db`. Previous containers reference the
@@ -364,7 +387,7 @@ handover): **106 backend tests, 50 frontend tests, 10 Chromium checks**, product
 frontend build and isolated local API/SPA smoke checks passed. The Docker exporter
 change was validated with **120 backend tests** (14 exporter tests, including real
 `normalise_snapshot` compatibility). Bulk/exclusions added **137 backend tests**, and
-the Phase 5 network-discovery slice brings the totals to **146 backend tests, 22
+the Phase 5 network-discovery slice brings the totals to **151 backend tests, 22
 scanner tests and 61 frontend unit tests**; the production frontend build and four
 Reconciliation/Network discovery Playwright checks passed. Other browser specs were
 not rerun. Backend validation used Python 3.12; production Dockerfile uses Python
@@ -415,6 +438,7 @@ logic.
 
 - [Phase 4 contract and scanner investigation](phase4-reconciliation.md).
 - [Network discovery architecture, configuration and APIs](network-discovery.md).
+- [Supervised Betty scanner test deployment](scanner-betty-test-deployment.md).
 - [Phase 3 implementation report](container-group-management-phase3.md) — historical.
 - [Phase 3 polish and migration review](container-group-polish-review.md) — historical
   development/validation detail, superseded by this handover for current workflow.

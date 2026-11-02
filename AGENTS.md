@@ -66,6 +66,10 @@ plugins, published environment, fixed workspace path or particular model is requ
 - Private env: `/mnt/cache/appdata/homelab-hub-redesign-config/phase3.env` (never commit values).
 - FolderView input: `/boot/config/plugins/folderview.plus/docker.json`, read-only.
 - Script: `scripts/deploy-betty-test.sh`; execute on Betty only after explicit approval.
+  The separate idempotent `scripts/deploy-betty-test-scanner.sh` builds/starts only
+  `homelab-hub-nmap-test` on the private `homelab-hub-nmap-test-net` bridge and
+  publishes no host port. Shared token/ranges live in the private
+  `scanner-test.env` (mode 600), never in Git or command output.
   It builds, takes/verifies an online SQLite backup, retains the stopped previous container,
   starts the test image on host 8790 and health-checks it. No automatic database restoration.
 - Retained rollback containers share the data volume; they are not frozen database backups.

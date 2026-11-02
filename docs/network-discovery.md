@@ -71,7 +71,7 @@ Docker socket.
 ```sh
 HLH_SCANNER_URL=http://127.0.0.1:8791
 HLH_SCANNER_TOKEN=<shared random token>
-HLH_SCANNER_APPROVED_RANGES=192.168.1.0/24
+HLH_SCANNER_APPROVED_RANGES=<verified-private-subnet>
 HLH_SCANNER_DEFAULT_PORTS=22,80,443,445,3389,8080,8443
 HLH_SCANNER_MAX_HOSTS=1024
 HLH_SCANNER_MAX_PORTS=256
@@ -85,7 +85,7 @@ so a browser cannot bypass the allowlist.
 
 ```sh
 HLH_SCANNER_TOKEN=<the same shared token>
-HLH_SCANNER_APPROVED_RANGES=192.168.1.0/24
+HLH_SCANNER_APPROVED_RANGES=<verified-private-subnet>
 HLH_SCANNER_BIND=127.0.0.1
 HLH_SCANNER_PORT=8791
 HLH_SCANNER_DEFAULT_PORTS=22,80,443,445,3389,8080,8443
@@ -109,7 +109,7 @@ Host-side (simplest for a supervised test):
 ```sh
 cd /path/to/homelab-hub
 export HLH_SCANNER_TOKEN="$(openssl rand -hex 32)"
-export HLH_SCANNER_APPROVED_RANGES=192.168.1.0/24
+export HLH_SCANNER_APPROVED_RANGES='<verified-private-subnet>'
 export HLH_SCANNER_BIND=127.0.0.1
 PYTHONPATH=scanner python -m hlh_scanner.server
 ```
@@ -129,7 +129,7 @@ docker run -d --name homelab-hub-scanner \
   --cap-add NET_RAW --cap-add NET_ADMIN \
   --read-only --tmpfs /tmp \
   -e HLH_SCANNER_TOKEN=... \
-  -e HLH_SCANNER_APPROVED_RANGES=192.168.1.0/24 \
+  -e HLH_SCANNER_APPROVED_RANGES='<verified-private-subnet>' \
   -e HLH_SCANNER_BIND=127.0.0.1 \
   homelab-hub-scanner:local
 ```
@@ -141,9 +141,16 @@ gateway or private Docker network; do not publish the scanner port to the intern
 If the scanner must listen on a non-loopback interface, restrict it with host
 firewall rules and keep token authentication enabled.
 
-For the Betty test instance, add the two web variables to the private env file and
-restart the test container only after explicit approval. This repository does not
-deploy or modify either running installation.
+For the supervised Betty test instance, use the prepared dedicated bridge and
+scripts instead of the host-network example:
+[scanner-betty-test-deployment.md](scanner-betty-test-deployment.md). The scanner
+there is `homelab-hub-nmap-test`, publishes no host port, and receives only
+`NET_RAW` with all other capabilities dropped.
+
+The supervised sequence uses the separate `scanner-test.env` described in that
+document; the web deploy script passes it to the test container and no scanner
+values need to be copied into `phase3.env`. Do not deploy or modify either running
+installation without explicit approval.
 
 ## API
 
