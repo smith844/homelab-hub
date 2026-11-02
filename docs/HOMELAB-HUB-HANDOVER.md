@@ -50,6 +50,7 @@ observations with inventory and offers reviewed container changes.
 | Identity/resolution | `services/group_identity.py`, `group_resolution.py`, `group_customisations.py` |
 | Group backups | `services/group_backup.py`, `routes/inventory.py` |
 | Reconciliation | `routes/reconciliation.py`, `services/reconciliation.py` |
+| Reconciliation exclusions | `models/reconciliation.py`, migration `011_reconciliation_exclusions` |
 | Input/identity adapters | `services/discovery_adapters.py`, `discovery_identity.py`, `network_reconciliation.py` |
 | SPA/navigation | `frontend/src/App.svelte`, `components/Sidebar.svelte` |
 | Management pages | `frontend/src/pages/GroupsPage.svelte`, `ReconciliationPage.svelte` |
@@ -61,7 +62,7 @@ observations with inventory and offers reviewed container changes.
 
 Backend paths in this table are relative to `backend/app/` unless shown otherwise.
 
-## Database and migration 010
+## Database and migrations
 
 Inventory models include `Hardware`, `VM`, `AppService`, `Storage`, `Share`,
 `Network`/`NetworkMember`, `Misc`, `Document`, and legacy map/layout relationships.
@@ -72,7 +73,7 @@ Migration chain, in order:
 
 `001` → `002` → `003` → `004` → `005` → `006` → `007` →
 `add89462ccd0` → `008_add_mac_address` → `009_container_groups` →
-**`010_group_customisations`**.
+`010_group_customisations` → **`011_reconciliation_exclusions`**.
 
 - `009` creates groups, imported assignments and manual overrides. Downgrading it
   drops grouping data.
@@ -83,15 +84,21 @@ Migration chain, in order:
   column case. Unexpected inspection/SQL errors propagate. Regression tests cover
   a populated Phase 3 upgrade, existing-column preservation and read-only DDL failure.
 - Its downgrade drops the ownership-tracking column and loses those flags.
-- Phase 4 adds **no schema migration**. Reviewed identity and observation metadata
-  uses a reserved `hlh-discovery:v1` JSON comment in the existing application notes.
+- `011` adds only the **`reconciliation_exclusions`** table (host/name uniqueness,
+  host index, nullable label/reason, timestamps). It does not alter inventory,
+  grouping or Docker. Downgrading it drops stored exclusion policy rows only.
+- Reviewed reconciliation identity and observation metadata still needs **no schema
+  migration**: it uses a reserved `hlh-discovery:v1` JSON comment in application
+  notes.
 
 **Back up the database before migrations. Approval is required before applying
 migrations to live data.** Old images predating 010 cannot start normally against
 a revision-010 database: their startup Alembic command does not recognise 010.
-Rollback across that boundary requires **both the previous image and its matching
-pre-migration database backup**, not an image-only switch or a falsified version
-stamp. See the deployment section for the shared-volume consequence.
+The same applies across 011: a pre-011 image does not recognise the new revision,
+even though the migration is additive. Rollback across either boundary requires
+**both the previous image and its matching pre-migration database backup**, not an
+image-only switch or a falsified version stamp. See the deployment section for the
+shared-volume consequence.
 
 ## Identity, grouping and backups: invariants to preserve
 
@@ -170,8 +177,16 @@ SQLite state checks and writes are serialized. Nothing automatically deletes app
 It distinguishes stable identity matches, additions, changed runtime/image metadata,
 unknown versus confirmed-absent recorded Docker identities, duplicate identities,
 FolderView-without-inventory and intentionally or otherwise ungrouped apps.
-Manual matching, metadata updates and additions are **one resource at a time**.
-There is no reviewed bulk apply, persistent exclusion list or scan history yet.
+Single-resource matching, metadata updates and additions remain available. Reviewed
+**bulk metadata updates** now preview all confidently matched containers and apply
+only container ID, image ID, image reference and observation time in one transaction;
+they never create or delete applications or touch names, notes, parents, grouping or
+map data. Host-scoped **exclusions** persist in `reconciliation_exclusions`, move
+selected unmatched containers out of ordinary warnings into a separate visible list,
+and never infer from name prefixes or alter Docker/inventory. Dashboard summaries and
+filters separate matched, unmatched, excluded, uncertain and not-seen resources.
+There is still no automatic background reconciliation, reviewed bulk *addition* or
+scan history.
 
 A container snapshot must explicitly declare successful complete `all_containers`
 coverage, include stopped containers, contain an explicit array, and have a valid
@@ -327,14 +342,17 @@ file. Back up an existing database before any migration. From `backend/`, use
 needs `frontend/dist/` copied into ignored `backend/static/` after building.
 Do not request live infrastructure secrets for ordinary unit/browser tests.
 
-Last full recorded functional validation at `e1e595b` (not rerun for this docs-only
+Last full recorded functional validation at `e1e595b` (not rerun for the docs-only
 handover): **106 backend tests, 50 frontend tests, 10 Chromium checks**, production
 frontend build and isolated local API/SPA smoke checks passed. The Docker exporter
-change was validated with **120 backend tests** (14 new exporter tests, including
-real `normalise_snapshot` compatibility) and did not modify frontend code.
-Backend validation used Python 3.12 and Node 24; production Dockerfile uses Python
-3.14. Existing warnings: SQLAlchemy identity-map warning in inventory import;
-MapPage chunk >500 kB.
+change was validated with **120 backend tests** (14 exporter tests, including real
+`normalise_snapshot` compatibility). The bulk/exclusions change adds **137 backend
+tests** (bulk plans, exclusions, authentication, transaction rollback, freshness and
+data preservation) and **56 frontend unit tests**; the production frontend build and
+the three Reconciliation Playwright checks passed. Other browser specs were not
+rerun. Backend validation used Python 3.12; production Dockerfile uses Python 3.14.
+Existing warnings: SQLAlchemy identity-map warning in inventory import; MapPage
+chunk >500 kB.
 
 ## Next development priorities
 
@@ -347,27 +365,31 @@ MapPage chunk >500 kB.
    transport/orchestration; the exporter is not deployed or scheduled, and the web
    app still has no Docker socket. Preserve physical-host/VM provenance for
    Betty/Unraid and Blackbox/Proxmox. Developing a collector is not deployment approval.
-2. **Reviewed bulk reconciliation of discovered metadata.** Preview the 84 matched
-   records' missing observations separately from actual ID changes; preserve custom
-   fields, notes markers and overrides. Define atomicity/retry/stale-preview handling
-   before bulk apply. No automatic deletion or silent import.
-3. **Persistent exclusions for deployment backup containers.** Design explicit
-   host-scoped policies with visible reasons, separately from inventory deletion or
-   grouping overrides. The six rollback containers are the initial policy target;
-   decisions about the active redesign container and scanner remain explicit.
+2. **Reviewed bulk reconciliation of discovered metadata.** Delivered: the reviewed
+   bulk preview/apply updates only container ID, image ID, image reference and
+   observation timestamp for confidently matched containers, preserves custom
+   fields/notes markers/overrides and rolls back as one transaction. Remaining work
+   is reviewed bulk handling of genuinely ambiguous additions/absences, not silent
+   import or automatic deletion.
+3. **Persistent exclusions for deployment backup containers.** Delivered: explicit
+   host-scoped exclusions with visible reasons and separate display, stored in
+   `reconciliation_exclusions` and managed with admin-authenticated add/remove.
+   The six rollback containers can now be excluded as operational policy; decisions
+   about the active redesign container and scanner remain explicit and are not
+   inferred from names.
 4. **Integrate the existing Nmap scanner.** Reuse its verified discovery/probing;
    define authenticated read-only transport and freshness/provenance without
    inventing Docker data or sharing databases implicitly. Do not copy its unsafe
    direct-import or TLS-bypass behaviour.
-5. **Improve dashboard summaries/filtering.** Separate matched, missing metadata,
-   genuinely changed IDs, expected operational/excluded containers, duplicates,
-   stale/unknown evidence and grouping gaps. Persisted scan history is not yet present.
+5. **Improve dashboard summaries/filtering.** Delivered for Reconciliation:
+   matched/unmatched/excluded/uncertain/not-seen summaries plus category and search
+   filters while detailed sections remain available. Remaining work is persisted
+   scan history and integrations into broader dashboard views.
 
-Recommended next tasks: reviewed **bulk** reconciliation of recorded container/image
-metadata (previewed separately from actual changes), persistent host-scoped
-exclusions for deployment backup containers, and smaller dashboard summaries.
-Use the 92/84/eight/zero baseline for acceptance planning; do not hard-code these
-changing counts into application logic.
+Recommended next tasks: Nmap integration as a separate discovery source, persisted
+scan history with explicit freshness/provenance, and reviewed bulk handling of
+ambiguous inventory gaps. Use the 92/84/eight/zero baseline for acceptance planning;
+do not hard-code these changing counts into application logic.
 
 ## Supporting documentation
 

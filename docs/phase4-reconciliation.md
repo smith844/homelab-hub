@@ -99,10 +99,48 @@ Existing manual overrides (including explicit Ungrouped) follow a manually match
 identity. Conflicting choices/duplicate identities block the action. FolderView
 assignments, group IDs and browser map anchor/layout keys are not rewritten.
 
+### Reviewed bulk metadata updates
+
+`POST /api/reconciliation/preview-bulk` and
+`POST /api/reconciliation/apply-bulk` extend the same reviewed-action model to many
+confidently matched containers:
+
+- The preview requires a **successful, fresh, authoritative** all-container snapshot
+  and selects only rows classified `matched`. Duplicate, older, excluded,
+  unconfirmed-absent and un-matched observations are reported as skipped, never
+  silently updated. An explicit `container_keys` selection containing an ineligible
+  row is rejected instead of partially applied.
+- The plan contains only `container_id`, `image_id`, `image`, `observed_at` and the
+  target application id. Application names, descriptions, user notes, parents,
+  icons, grouping overrides, imported assignments and map data are not fields and
+  are not written. The existing Docker label casing is retained.
+- Apply requires the admin token and a signed unexpired preview. The state
+  fingerprint check and every per-application metadata write happen in **one SQLite
+  transaction** (`BEGIN IMMEDIATE`), with full rollback on error. No application is
+  created or deleted, and nothing runs in the background.
+
+### Persistent exclusions
+
+`GET/POST /api/reconciliation/exclusions` and
+`DELETE /api/reconciliation/exclusions/<id>` manage explicit host-scoped policy
+rows keyed by normalized Docker container name. Writes require the admin token.
+Exclusions never infer from name prefixes, never modify Docker, inventory or
+grouping, and never delete anything. They only move matching resources out of
+ordinary missing-inventory warnings and into a separately listed **Excluded**
+section; snapshots still show whether each exclusion was observed. Removing an
+exclusion restores the ordinary warning. An excluded unmatched container is not
+eligible for add/match/bulk actions until its exclusion is removed. Exclusions are
+stored in the SQLite `reconciliation_exclusions` table (migration 011), so they
+survive restarts.
+
+Dashboard summaries distinguish matched, unmatched, excluded, uncertain and
+not-seen resources, and the page can filter/search discovered rows without hiding
+the detailed sections.
+
 Snapshots are page-local; there is no persisted scan history, automatic refresh,
 network-resource mutation or trusted live transport yet. Next integration work is
-an authenticated read-only transport for the existing scanner and optional
-scheduling/reviewed orchestration of the Docker exporter (including Docker-in-VM
-host provenance). This also determines how Betty and Blackbox produce authoritative
-container data; network probing alone cannot supply it. No deployment or live
-collection is authorized by these instructions.
+an authenticated read-only transport for the existing scanner, optional scheduling/
+orchestration of the Docker exporter (including Docker-in-VM host provenance), and
+Nmap-based network discovery as a separate source. This also determines how Betty
+and Blackbox produce authoritative container data; network probing alone cannot
+supply it. No deployment or live collection is authorized by these instructions.

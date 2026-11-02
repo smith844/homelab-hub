@@ -3,12 +3,24 @@ import secrets
 from flask import Blueprint, current_app, jsonify, request
 from itsdangerous import BadData, URLSafeTimedSerializer
 from sqlalchemy import text
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from ..models import Hardware, db
 from ..services.admin_auth import admin_required
 from ..services.group_identity import normalize_identity
-from ..services.reconciliation import ReconciliationError, compare, execute_action, fingerprint, plan_action
+from ..services.reconciliation import (
+    ReconciliationConflict,
+    ReconciliationError,
+    add_exclusion,
+    compare,
+    execute_action,
+    execute_bulk_update,
+    fingerprint,
+    list_exclusions,
+    plan_action,
+    plan_bulk_update,
+    remove_exclusion,
+)
 from ..services.discovery_adapters import MAX_AGE_SECONDS, timestamp, utc_now
 
 bp = Blueprint("reconciliation", __name__, url_prefix="/api/reconciliation")
@@ -86,3 +98,109 @@ def apply():
     except OperationalError:
         db.session.rollback()
         return jsonify(error="Inventory is busy; retry comparison and preview"), 409
+    except Exception:
+        db.session.rollback()
+        raise
+
+
+# ---------------------------------------------------------------------------
+# Persistent exclusions: host-scoped policy, never an inventory/Docker change.
+# ---------------------------------------------------------------------------
+@bp.get("/exclusions")
+def exclusions():
+    try:
+        host_key = normalize_identity(request.args.get("host_key"))
+        if not host_key:
+            raise ReconciliationError("host_key is required")
+        return jsonify(exclusions=list_exclusions(host_key))
+    except ReconciliationError as exc:
+        return jsonify(error=str(exc)), 400
+
+
+@bp.post("/exclusions")
+@admin_required
+def create_exclusion():
+    try:
+        data = body()
+        item = add_exclusion(
+            normalize_identity(data.get("host_key")),
+            data.get("container_name"),
+            data.get("reason"),
+        )
+        db.session.commit()
+        return jsonify(exclusion=item), 201
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify(error="This container is already excluded for this host"), 409
+    except ReconciliationConflict as exc:
+        db.session.rollback()
+        return jsonify(error=str(exc)), 409
+    except ReconciliationError as exc:
+        db.session.rollback()
+        return jsonify(error=str(exc)), 400
+
+
+@bp.delete("/exclusions/<int:exclusion_id>")
+@admin_required
+def delete_exclusion(exclusion_id):
+    try:
+        removed = remove_exclusion(exclusion_id)
+        if removed is None:
+            db.session.rollback()
+            return jsonify(error="Exclusion not found"), 404
+        db.session.commit()
+        return jsonify(exclusion=removed, message="Exclusion removed; inventory and Docker were not changed")
+    except OperationalError:
+        db.session.rollback()
+        return jsonify(error="Inventory is busy; retry"), 409
+
+
+# ---------------------------------------------------------------------------
+# Reviewed bulk metadata updates: no additions, deletions or grouping changes.
+# ---------------------------------------------------------------------------
+@bp.post("/preview-bulk")
+def preview_bulk():
+    try:
+        data = body()
+        plan = plan_bulk_update(
+            normalize_identity(data.get("host_key")),
+            data.get("snapshot"),
+            data.get("container_keys"),
+        )
+        return jsonify(plan=plan, token=signer().dumps(plan), expires_in=600)
+    except ReconciliationError as exc:
+        return jsonify(error=str(exc)), 400
+
+
+@bp.post("/apply-bulk")
+@admin_required
+def apply_bulk():
+    try:
+        data = body()
+        if not isinstance(data.get("token"), str):
+            raise ReconciliationError("A reviewed preview token is required")
+        plan = signer().loads(data["token"], max_age=600)
+        if not isinstance(plan, dict) or plan.get("kind") != "bulk_update":
+            raise ReconciliationError("This token is not a bulk metadata preview")
+        # Serialize SQLite writes so the state check and all updates are one unit.
+        if db.engine.dialect.name == "sqlite":
+            db.session.execute(text("BEGIN IMMEDIATE"))
+        if fingerprint(plan.get("host_key")) != plan.get("fingerprint"):
+            db.session.rollback()
+            return jsonify(error="Inventory or grouping changed; compare and preview again"), 409
+        updated = execute_bulk_update(plan)
+        db.session.commit()
+        return jsonify(updated=updated,
+                       message="Reviewed metadata updated atomically; no applications were created or deleted")
+    except BadData:
+        db.session.rollback()
+        return jsonify(error="Preview is invalid, expired or from a previous server session; preview again"), 409
+    except ReconciliationError as exc:
+        db.session.rollback()
+        return jsonify(error=str(exc)), 400
+    except OperationalError:
+        db.session.rollback()
+        return jsonify(error="Inventory is busy; retry comparison and preview"), 409
+    except Exception:
+        db.session.rollback()
+        raise

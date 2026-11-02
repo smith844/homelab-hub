@@ -13,6 +13,7 @@ from .container_group import (
     ContainerGroupAssignment,
     ContainerGroupOverride,
 )
+from .reconciliation import ReconciliationExclusion
 
 __all__ = [
     "db",
@@ -32,4 +33,5 @@ __all__ = [
     "ContainerGroup",
     "ContainerGroupAssignment",
     "ContainerGroupOverride",
+    "ReconciliationExclusion",
 ]

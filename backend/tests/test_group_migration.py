@@ -32,7 +32,7 @@ def test_phase3_upgrade_preserves_existing_groups(app, tmp_path):
         assert result.returncode == 0, result.stderr
     with sqlite3.connect(path) as conn:
         assert conn.execute("SELECT name, icon, sort_order, active, customisations_json FROM container_groups").fetchone() == ("Media", "🎬", 42, 0, None)
-        assert conn.execute("SELECT version_num FROM alembic_version").fetchone()[0] == '010_group_customisations'
+        assert conn.execute("SELECT version_num FROM alembic_version").fetchone()[0] == '011_reconciliation_exclusions'
 
 
 @pytest.fixture()
