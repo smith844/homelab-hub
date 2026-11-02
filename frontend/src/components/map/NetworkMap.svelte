@@ -241,15 +241,28 @@
             },
           },
           {
-            selector: "node[groupImage]",
+            selector: 'node[type="group"][groupImage]',
             style: {
+              // Keep the 220 x 92 card footprint used by layouts and anchors.
+              // Icon: y=8..32; text begins at y=40, with room for a wrapped
+              // two-line name and a separate membership-count line.
+              label: node => {
+                const name = node.data("label").trim().replace(/ · \d+$/, "");
+                const count = node.data("totalMembers");
+                return `${name}\n${count} member${count === 1 ? "" : "s"}`;
+              },
               "background-image": "data(groupImage)",
               "background-image-crossorigin": "anonymous",
-              "background-fit": "contain",
-              "background-width": "28px",
-              "background-height": "28px",
-              "background-position-y": "12px",
-              "text-margin-y": 18,
+              "background-fit": "none",
+              "background-width": "24px",
+              "background-height": "24px",
+              "background-position-x": "50%",
+              "background-position-y": "8px",
+              "font-size": "12px",
+              "line-height": 1.2,
+              "text-justification": "center",
+              "text-valign": "bottom",
+              "text-margin-y": -52,
             },
           },
           {
