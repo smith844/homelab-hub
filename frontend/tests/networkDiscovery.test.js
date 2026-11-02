@@ -2,84 +2,103 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  COMPARISON_FILTERS,
-  comparisonCategory,
-  discoveryCategories,
-  filterComparisonRows,
-  filterScanRows,
+  HOST_MATCH_FILTERS,
+  SERVICE_MATCH_FILTERS,
+  candidateCount,
+  filterHostRows,
+  filterServiceRows,
+  primaryCandidate,
   scanIsTerminal,
-  summarizeScan,
+  summarizeNetworkComparison,
 } from '../src/lib/networkDiscovery.js';
 
-const comparisonRows = [
-  {ip: '192.168.1.20', port: 443, name: 'Admin UI', classification: 'matched',
-    matches: [{name: 'Admin UI'}]},
-  {ip: '192.168.1.21', port: 80, name: 'Unknown web', classification: 'unmatched', matches: []},
-  {ip: '192.168.1.22', port: 22, name: 'Duplicate host', classification: 'duplicate', matches: []},
-  {ip: '192.168.1.23', port: 443, name: 'Partial probe', classification: 'unverified', matches: []},
+const hosts = [
+  {ip: '192.168.1.16', hostname: 'pi.hole', classification: 'matched',
+    evidence: ['IP address', 'hostname'],
+    candidates: [{type: 'hardware', id: 3, name: 'PiHole Main', category: 'Physical host',
+      evidence: ['IP address', 'hostname']}],
+    service_candidates: []},
+  {ip: '192.168.1.80', hostname: 'traefik.smitharend.com', classification: 'shared',
+    evidence: ['IP address'],
+    candidates: [
+      {type: 'hardware', id: 1, name: 'Betty', category: 'Physical host', evidence: ['IP address']},
+      {type: 'vms', id: 2, name: 'Docker', category: 'VM / runtime', evidence: ['IP address']},
+    ],
+    service_candidates: [{type: 'apps', id: 7, name: 'Traefik', category: 'Application / service',
+      port: 443, evidence: ['parent IP']}]},
+  {ip: '192.168.1.200', classification: 'plausible', evidence: ['application IP'],
+    candidates: [{type: 'apps', id: 8, name: 'Portainer', category: 'Application / service',
+      evidence: ['application IP']}], service_candidates: []},
+  {ip: '192.168.1.55', classification: 'ambiguous', evidence: [],
+    candidates: [{type: 'misc', id: 9, name: 'Shared endpoint', category: 'Other device',
+      evidence: []}], service_candidates: []},
+  {ip: '192.168.1.99', classification: 'unverified', evidence: ['IP address'],
+    candidates: [], service_candidates: []},
 ];
 
-test('comparison filters distinguish matched, unmatched and uncertain results', () => {
-  assert.deepEqual(COMPARISON_FILTERS.map(item => item.value),
-    ['all', 'matched', 'unmatched', 'uncertain', 'unknown']);
-  assert.equal(comparisonCategory('matched'), 'matched');
-  assert.equal(comparisonCategory('unmatched'), 'unmatched');
-  assert.equal(comparisonCategory('duplicate'), 'uncertain');
-  assert.equal(comparisonCategory('unverified'), 'uncertain');
-  assert.equal(comparisonCategory('new-classification'), 'other');
-  assert.deepEqual(filterComparisonRows(comparisonRows, 'matched').map(row => row.ip),
-    ['192.168.1.20']);
-  assert.deepEqual(filterComparisonRows(comparisonRows, 'uncertain').map(row => row.ip),
-    ['192.168.1.22', '192.168.1.23']);
-  assert.deepEqual(filterComparisonRows(comparisonRows, 'unknown'),
-    filterComparisonRows(comparisonRows, 'all').filter(row =>
-      comparisonCategory(row.classification) === 'other'));
+const services = [
+  {ip: '192.168.1.16', port: 80, hostname: 'pi.hole', service_name: 'http',
+    classification: 'plausible', evidence: ['parent IP'],
+    candidates: [{type: 'apps', id: 4, name: 'Pi-hole Admin', category: 'Application / service',
+      evidence: ['parent IP']}]},
+  {ip: '192.168.1.200', port: 9443, service_name: 'https', classification: 'matched',
+    evidence: ['application IP'],
+    candidates: [{type: 'apps', id: 8, name: 'Portainer', category: 'Application / service',
+      evidence: ['application IP']}]},
+  {ip: '192.168.1.55', port: 443, service_name: 'https', classification: 'ambiguous',
+    evidence: [], candidates: []},
+];
+
+test('host filters expose all matching categories and apply search to candidate names', () => {
+  assert.deepEqual(HOST_MATCH_FILTERS.map(item => item.value),
+    ['all', 'matched', 'plausible', 'shared', 'ambiguous', 'unmatched', 'unverified']);
+  assert.deepEqual(filterHostRows(hosts, 'matched').map(row => row.ip), ['192.168.1.16']);
+  assert.deepEqual(filterHostRows(hosts, 'shared').map(row => row.ip), ['192.168.1.80']);
+  assert.deepEqual(filterHostRows(hosts, 'all', 'betty').map(row => row.ip), ['192.168.1.80']);
+  assert.deepEqual(filterHostRows(hosts, 'all', 'traefik').map(row => row.ip), ['192.168.1.80']);
+  assert.deepEqual(filterHostRows(hosts, 'all', 'portainer').map(row => row.ip), ['192.168.1.200']);
+  assert.deepEqual(filterHostRows(hosts, 'matched', 'portainer'), []);
+  assert.deepEqual(filterHostRows(hosts, 'all', '192.168.1.200').map(row => row.ip),
+    ['192.168.1.200']);
 });
 
-test('comparison search covers endpoint, service name and inventory candidates', () => {
-  assert.deepEqual(filterComparisonRows(comparisonRows, 'all', '443').map(row => row.ip),
-    ['192.168.1.20', '192.168.1.23']);
-  assert.deepEqual(filterComparisonRows(comparisonRows, 'all', 'admin').map(row => row.ip),
-    ['192.168.1.20']);
-  assert.deepEqual(filterComparisonRows(comparisonRows, 'matched', 'unknown'), []);
+test('service filters separate endpoint matches and support search', () => {
+  assert.deepEqual(SERVICE_MATCH_FILTERS.map(item => item.value),
+    ['all', 'matched', 'plausible', 'ambiguous', 'unmatched', 'unverified']);
+  assert.deepEqual(filterServiceRows(services, 'matched').map(row => row.port), [9443]);
+  assert.deepEqual(filterServiceRows(services, 'plausible').map(row => row.port), [80]);
+  assert.deepEqual(filterServiceRows(services, 'all', 'pi-hole').map(row => row.port), [80]);
+  assert.deepEqual(filterServiceRows(services, 'all', 'https').map(row => row.port), [9443, 443]);
+  assert.deepEqual(filterServiceRows(services, 'ambiguous', 'https').map(row => row.port), [443]);
 });
 
-test('raw scan filtering covers host identity and service metadata', () => {
-  const rows = [
-    {ip: '192.168.1.20', hostname: 'nas.lan', mac: 'AA:BB:CC:DD:EE:FF', vendor: 'Acme',
-      port: 445, service_name: 'microsoft-ds', service_version: 'Windows'},
-    {ip: '192.168.1.30', hostname: 'camera.lan', mac: '', vendor: 'Hikvision',
-      port: 443, service_name: 'https', service_version: ''},
-  ];
-  assert.deepEqual(filterScanRows(rows, 'nas').map(row => row.ip), ['192.168.1.20']);
-  assert.deepEqual(filterScanRows(rows, 'AA:BB').map(row => row.ip), ['192.168.1.20']);
-  assert.deepEqual(filterScanRows(rows, 'hikvision').map(row => row.ip), ['192.168.1.30']);
-  assert.deepEqual(filterScanRows(rows, '443').map(row => row.ip), ['192.168.1.30']);
-  assert.deepEqual(filterScanRows(rows, ''), rows);
+test('primary candidate and candidate count include services on a host address', () => {
+  assert.equal(primaryCandidate(hosts[0]).name, 'PiHole Main');
+  assert.equal(primaryCandidate(hosts[4]), null);
+  assert.equal(candidateCount(hosts[0]), 1);
+  assert.equal(candidateCount(hosts[1]), 3);
 });
 
-test('scan summary reports counts without treating partial output as complete', () => {
-  assert.deepEqual(summarizeScan(null), {
-    status: 'idle', hosts: 0, services: 0, hosts_up: 0, hosts_down: 0, warnings: 0, complete: false,
-  });
-  const summary = summarizeScan({
-    status: 'partial', complete: false, hosts_up: 2, hosts_down: 254,
-    hosts: [{ip: '192.168.1.20'}, {ip: '192.168.1.21'}],
-    results: [{ip: '192.168.1.20', port: 443}, {ip: '192.168.1.20', port: 80}],
-    warnings: ['timeout'],
-  });
-  assert.deepEqual(summary, {
-    status: 'partial', hosts: 2, services: 2, hosts_up: 2, hosts_down: 254,
-    warnings: 1, complete: false,
-  });
+test('summary uses server counts when present and otherwise derives them', () => {
+  const explicit = {hosts_discovered: 55, hosts_matched: 2, hosts_plausible: 1,
+    hosts_shared: 1, hosts_ambiguous: 1, hosts_unmatched: 50, hosts_unverified: 0,
+    services_discovered: 5, services_matched: 1, services_plausible: 2,
+    services_ambiguous: 1, services_unmatched: 1, services_unverified: 0};
+  assert.equal(summarizeNetworkComparison({summary: explicit, hosts, services}), explicit);
+  const derived = summarizeNetworkComparison({hosts, services});
+  assert.equal(derived.hosts_discovered, 5);
+  assert.equal(derived.hosts_matched, 1);
+  assert.equal(derived.hosts_shared, 1);
+  assert.equal(derived.hosts_unverified, 1);
+  assert.equal(derived.services_discovered, 3);
+  assert.equal(derived.services_matched, 1);
+  assert.equal(derived.services_plausible, 1);
+  assert.equal(derived.hosts_unmatched, 0);
+});
+
+test('terminal status is explicit', () => {
   assert.equal(scanIsTerminal('completed'), true);
   assert.equal(scanIsTerminal('partial'), true);
   assert.equal(scanIsTerminal('failed'), true);
   assert.equal(scanIsTerminal('running'), false);
-});
-
-test('discovery category counts power compact comparison summaries', () => {
-  assert.deepEqual(discoveryCategories(comparisonRows), {
-    matched: 1, unmatched: 1, uncertain: 2, other: 0,
-  });
 });

@@ -54,6 +54,7 @@ observations with inventory and offers reviewed container changes.
 | Reconciliation | `routes/reconciliation.py`, `services/reconciliation.py` |
 | Reconciliation exclusions | `models/reconciliation.py`, migration `011_reconciliation_exclusions` |
 | Network discovery | `routes/network_discovery.py`, `services/network_discovery.py`, `pages/NetworkDiscoveryPage.svelte` |
+| Network-wide matching | `services/network_wide_reconciliation.py` (read-only host/service evidence) |
 | Network scanner service | `scanner/hlh_scanner/` (target validation, Nmap XML, jobs, HTTP API) |
 | Input/identity adapters | `services/discovery_adapters.py`, `discovery_identity.py`, `network_reconciliation.py` |
 | SPA/navigation | `frontend/src/App.svelte`, `components/Sidebar.svelte` |
@@ -259,10 +260,14 @@ not copy unsafe behaviour:
   visible for review but never imply device absence. The existing network adapter
   classifies observations as matched/unmatched/duplicate/unverified only; network
   ports are not Docker identities.
-- The Network discovery page shows raw hosts/services, filters and read-only
-  inventory comparison. It does not add inventory, edit records or change map
-  layouts. See [network-discovery.md](network-discovery.md) for exact execution,
-  configuration, API and future supervised Betty prerequisites.
+- The Network discovery page uses a dedicated read-only **network-wide matcher**
+  (`services/network_wide_reconciliation.py`) across hardware, VMs, other devices,
+  application endpoints and network memberships. It separates host-level device
+  matches from service-level IP+port matches, labels matched/plausible/shared/
+  ambiguous/unmatched/unverified evidence, and supports expandable candidate details.
+  It never adds inventory, edits records or changes map layouts. See
+  [network-discovery.md](network-discovery.md) for exact execution, configuration,
+  API and matching rules.
 
 The upstream direct-import endpoints still must not be called or trusted: they write
 that process's database without HomeLab-Hub's preview/admin safeguards, and its HTTP
@@ -387,7 +392,7 @@ handover): **106 backend tests, 50 frontend tests, 10 Chromium checks**, product
 frontend build and isolated local API/SPA smoke checks passed. The Docker exporter
 change was validated with **120 backend tests** (14 exporter tests, including real
 `normalise_snapshot` compatibility). Bulk/exclusions added **137 backend tests**, and
-the Phase 5 network-discovery slice brings the totals to **151 backend tests, 22
+the Phase 5 network-discovery slice brings the totals to **166 backend tests, 22
 scanner tests and 61 frontend unit tests**; the production frontend build and four
 Reconciliation/Network discovery Playwright checks passed. Other browser specs were
 not rerun. Backend validation used Python 3.12; production Dockerfile uses Python
@@ -419,10 +424,12 @@ MapPage chunk >500 kB.
    inferred from names.
 4. **Integrate the existing Nmap scanner.** Delivered as a separate
    token-authenticated scanner service with approved-target validation, bounded
-   host/TCP discovery, status timestamps and read-only comparison. Remaining work is
-   persisted scan history, reviewed inventory/map actions, optional HTTP probing with
-   verified TLS and supervised deployment/scheduling. Do not copy upstream direct
-   imports, OS fingerprinting or TLS bypass.
+   host/TCP discovery, status timestamps and read-only network-wide matching. The
+   matcher now searches the full inventory and separates host/service evidence.
+   Remaining work is persisted scan history, reviewed inventory/map actions, optional
+   HTTP probing with verified TLS, supervised deployment/scheduling and possible
+   UniFi evidence adapters. Do not copy upstream direct imports, OS fingerprinting or
+   TLS bypass.
 5. **Improve dashboard summaries/filtering.** Delivered for Reconciliation:
    matched/unmatched/excluded/uncertain/not-seen summaries plus category and search
    filters while detailed sections remain available. Remaining work is persisted

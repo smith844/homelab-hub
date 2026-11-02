@@ -46,12 +46,14 @@ A failed HTTP probe remains unverified even if its job completed. Network result
 cannot prove Docker presence/absence or make container changes.
 
 Phase 5 adds a separate, token-authenticated Nmap service and a Network discovery
-page. The page starts scans through `/api/network-discovery/scan`, then submits the
-scanner status to this same adapter for comparison. It supports `completed`,
-`partial` and `failed` statuses; partial/failed results stay visible but are
-unverified. The scanner never calls upstream import endpoints and never writes
-inventory. See [network-discovery.md](network-discovery.md) for architecture,
-approved-target configuration, APIs and supervised deployment prerequisites.
+page. The page starts scans through `/api/network-discovery/scan`, then uses the
+dedicated network-wide `/api/network-discovery/reconcile` matcher to compare hosts
+and services across hardware, VMs, other devices, application endpoints and network
+memberships. This matcher is read-only and separate from the Phase 4 host-scoped
+network adapter, which remains available for saved status responses. Partial/failed
+results stay visible but are unverified. The scanner never calls upstream import
+endpoints and never writes inventory. See [network-discovery.md](network-discovery.md)
+for architecture, approved-target configuration, APIs and matching rules.
 
 ## Separate container input contract
 

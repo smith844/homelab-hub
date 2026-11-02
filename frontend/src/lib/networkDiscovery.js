@@ -1,81 +1,90 @@
-/** Pure network-discovery filtering and summary helpers. */
-export const TERMINAL_STATUSES = ['completed', 'partial', 'failed'];
-
-export const COMPARISON_FILTERS = [
-  { value: 'all', label: 'All observations' },
-  { value: 'matched', label: 'Matched inventory' },
+/** Pure network-wide discovery filtering and summary helpers. */
+export const HOST_MATCH_FILTERS = [
+  { value: 'all', label: 'All hosts' },
+  { value: 'matched', label: 'Matched' },
+  { value: 'plausible', label: 'Plausible / review' },
+  { value: 'shared', label: 'Shared endpoint' },
+  { value: 'ambiguous', label: 'Ambiguous' },
   { value: 'unmatched', label: 'Unmatched' },
-  { value: 'uncertain', label: 'Uncertain / unverified' },
-  { value: 'unknown', label: 'Unknown / other' },
+  { value: 'unverified', label: 'Unverified / incomplete' },
 ];
+
+export const SERVICE_MATCH_FILTERS = [
+  { value: 'all', label: 'All services' },
+  { value: 'matched', label: 'Matched' },
+  { value: 'plausible', label: 'Plausible / review' },
+  { value: 'ambiguous', label: 'Ambiguous' },
+  { value: 'unmatched', label: 'Unmatched' },
+  { value: 'unverified', label: 'Unverified / incomplete' },
+];
+
+export const TERMINAL_STATUSES = ['completed', 'partial', 'failed'];
 
 export function scanIsTerminal(status) {
   return TERMINAL_STATUSES.includes(status);
 }
 
-export function comparisonCategory(classification) {
-  if (classification === 'matched') return 'matched';
-  if (classification === 'unmatched') return 'unmatched';
-  if (classification === 'duplicate' || classification === 'unverified') return 'uncertain';
-  return 'other';
+function _candidateText(row) {
+  const candidates = [...(row.candidates || []), ...(row.service_candidates || [])];
+  return candidates.map(candidate => [
+    candidate.name,
+    candidate.category,
+    ...(candidate.evidence || []),
+  ].join(' ')).join(' ');
 }
 
-export function filterComparisonRows(rows = [], filter = 'all', query = '') {
+function _matches(row, filter, query) {
+  if (filter !== 'all' && row.classification !== filter) return false;
   const needle = String(query || '').trim().toLowerCase();
-  const desired = filter === 'unknown' ? 'other' : filter;
-  return (rows || []).filter(row => {
-    if (filter !== 'all' && comparisonCategory(row.classification) !== desired) return false;
-    if (!needle) return true;
-    return [
-      row.ip,
-      row.port,
-      row.name,
-      row.classification,
-      ...(row.matches || []).map(match => match.name),
-    ].filter(value => value !== null && value !== undefined).join(' ').toLowerCase().includes(needle);
-  });
-}
-
-export function filterScanRows(rows = [], query = '') {
-  const needle = String(query || '').trim().toLowerCase();
-  if (!needle) return rows || [];
-  return (rows || []).filter(row => [
+  if (!needle) return true;
+  return [
     row.ip,
     row.hostname,
     row.mac,
-    row.mac_address,
     row.vendor,
     row.os,
     row.port,
     row.service_name,
     row.service_version,
-    row.state,
-  ].filter(value => value !== null && value !== undefined).join(' ').toLowerCase().includes(needle));
+    row.classification,
+    ...(row.evidence || []),
+    _candidateText(row),
+  ].filter(value => value !== null && value !== undefined).join(' ').toLowerCase().includes(needle);
 }
 
-export function summarizeScan(scan) {
-  if (!scan) {
-    return {status: 'idle', hosts: 0, services: 0, hosts_up: 0, hosts_down: 0, warnings: 0, complete: false};
-  }
-  const hosts = Array.isArray(scan.hosts) ? scan.hosts : [];
-  const results = Array.isArray(scan.results) ? scan.results : [];
-  return {
-    status: scan.status || 'unknown',
-    hosts: Array.isArray(scan.hosts)
-      ? hosts.length
-      : new Set(results.map(row => row.ip).filter(Boolean)).size,
-    services: results.filter(row => row.port !== null && row.port !== undefined).length,
-    hosts_up: Number.isInteger(scan.hosts_up) ? scan.hosts_up : 0,
-    hosts_down: Number.isInteger(scan.hosts_down) ? scan.hosts_down : 0,
-    warnings: Array.isArray(scan.warnings) ? scan.warnings.length : 0,
-    complete: scan.complete === true,
+export function filterHostRows(rows = [], filter = 'all', query = '') {
+  return (rows || []).filter(row => _matches(row, filter, query));
+}
+
+export function filterServiceRows(rows = [], filter = 'all', query = '') {
+  return (rows || []).filter(row => _matches(row, filter, query));
+}
+
+export function primaryCandidate(row) {
+  return row?.candidates?.[0] || null;
+}
+
+export function candidateCount(row) {
+  return (row?.candidates?.length || 0) + (row?.service_candidates?.length || 0);
+}
+
+export function summarizeNetworkComparison(result) {
+  if (result?.summary) return result.summary;
+  const hosts = result?.hosts || [];
+  const services = result?.services || [];
+  const count = (rows, classification) =>
+    rows.filter(row => row.classification === classification).length;
+  const summary = {
+    hosts_discovered: hosts.length,
+    services_discovered: services.length,
+    inventory_devices: 0,
+    inventory_services: 0,
   };
-}
-
-export function discoveryCategories(rows = []) {
-  return rows.reduce((counts, row) => {
-    const category = comparisonCategory(row.classification);
-    counts[category] = (counts[category] || 0) + 1;
-    return counts;
-  }, {matched: 0, unmatched: 0, uncertain: 0, other: 0});
+  for (const key of ['matched', 'plausible', 'shared', 'ambiguous', 'unmatched', 'unverified']) {
+    summary[`hosts_${key}`] = count(hosts, key);
+  }
+  for (const key of ['matched', 'plausible', 'ambiguous', 'unmatched', 'unverified']) {
+    summary[`services_${key}`] = count(services, key);
+  }
+  return summary;
 }

@@ -195,6 +195,54 @@ Web bridge:
 - `POST /api/network-discovery/scan` — admin token required; validates target,
   starts the scanner, returns `202 {scan}`.
 - `GET /api/network-discovery/scan/<uuid>` — read-only status proxy.
+- `POST /api/network-discovery/reconcile` — read-only, network-wide matching of a
+  scan status against the full inventory. No admin token is needed because it only
+  reads inventory and cannot write.
+
+## Network-wide inventory matching
+
+The Network discovery page no longer requires a selected root host. It uses a
+dedicated read-only matcher (`services/network_wide_reconciliation.py`) that indexes
+identity evidence across the whole inventory:
+
+- Hardware hosts: IP, MAC, hostname/FQDN and inventory name.
+- VMs/runtimes: IP, MAC, hostname and parent hardware.
+- Other devices: IP/hostname and inventory name.
+- Application/service endpoints: explicit IP, parent IP (with lower confidence),
+  hostname/FQDN and TCP port.
+- Network members: `NetworkMember.ip_on_network` addresses and their network names.
+- Network subnets: context only; a network record is never treated as a device.
+- Storage pools and shares are not treated as devices; they have no reliable host
+  identity in the current schema.
+
+Evidence rules:
+
+- Exact IP or MAC match to one device is a **matched** host-level result.
+- A hostname-only match is **plausible** and explicitly warns that DNS may be stale.
+- A hardware host and its single VM/runtime sharing an IP are **shared**, not a
+  duplicate physical device.
+- Multiple unrelated devices sharing an IP, or conflicting IP/hostname evidence, are
+  **ambiguous**; this covers possible virtual IPs and shared endpoints.
+- An address with only application/service records is **plausible** service-only
+  evidence; it is not promoted to a physical host.
+- Partial/failed scans mark all observations **unverified**. Missing observations
+  never imply that inventory devices were removed.
+- Service rows are separate from host rows. An explicit application IP+port is
+  matched; an inherited parent IP+port or hostname-only service is plausible; multiple
+  applications at the same IP+port are ambiguous.
+- No confidence percentages are used; candidates and evidence labels are returned
+  instead.
+
+```http
+POST /api/network-discovery/reconcile
+{"scan": <scanner status object>}
+```
+
+The response contains `hosts`, `services`, `summary` counts and short reasons.
+Candidate records include a type/id for the existing inventory links. The matcher
+never creates, updates, merges or deletes inventory, never edits maps and never
+changes Docker reconciliation.
+
 
 ## Status, failure and freshness
 
@@ -226,23 +274,29 @@ Web bridge:
 
 ## Comparison and review
 
-The page shows discovered hosts/services and posts the completed/partial scanner
-status to the existing reconciliation adapter:
+The page posts the completed/partial scanner status to the network-wide matcher:
 
 ```json
-{"host_key": "betty", "snapshot": {"data": {"type": "portscan", "status": "completed", "results": [...]}}}
+{"scan": {"type": "portscan", "status": "completed", "hosts": [...], "results": [...]}}
 ```
 
-That comparison classifies IP/MAC or IP+port observations as matched, unmatched,
-duplicate or unverified. Matched does not mean the inventory record is current and
-does not establish a Docker identity. Any future inventory edit or map change must
-remain a separate reviewed action.
+The result separates host-level device matches from service-level endpoint matches.
+Matched means evidence exists in inventory; it does not mean the record is current, and
+it does not establish a Docker identity. Partial/failed results are unverified. Any
+future inventory edit or map change must remain a separate reviewed action.
+
+The Phase 4 host-scoped `compare_network_scan` adapter remains in use by the existing
+Reconciliation page for saved network status responses. Docker container matching,
+group assignments, manual overrides, exclusions and bulk metadata reconciliation are
+unchanged.
+
 
 ## Tests
 
 ```sh
 python -m pytest -q scanner/tests
 python -m pytest -q backend/tests/test_network_discovery.py
+python -m pytest -q backend/tests/test_network_wide_reconciliation.py
 cd frontend && npm test
 ```
 
@@ -252,6 +306,8 @@ target rejection, authentication, partial results and reconciliation integration
 
 ## Future work
 
+- Future UniFi client/DHCP/device evidence can feed the same normalized observation
+  layer without changing inventory matching rules. UniFi is not assumed authoritative.
 - Persisted scan history/freshness tracking.
 - Reviewable inventory additions/map placement from network results.
 - Optional HTTP probing with verified TLS (never copy the upstream

@@ -39,7 +39,9 @@ plugins, published environment, fixed workspace path or particular model is requ
   live schema migrations, force pushes, production changes and irreversible operations.
 - Preserve stable root-host + logical container-name identity, app/group IDs, imported
   FolderView data, explicit Ungrouped/manual overrides and saved map anchors/layout keys.
-  Runtime container/image IDs are observations, not permanent identity.
+  Runtime container/image IDs are observations, not permanent identity. Network-wide
+  discovery matching is read-only and independent of host-scoped Docker matching.
+  It must not create, update, merge or delete inventory or change map layouts.
 - Preserve `hlh-discovery:v1` notes metadata when editing/extending importers. Comparison
   is read-only by default; reviewed apply needs admin authentication. Never auto-delete
   inventory or interpret failed/partial/missing scans as proof of absence.
