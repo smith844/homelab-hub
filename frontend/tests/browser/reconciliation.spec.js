@@ -60,6 +60,7 @@ for (const theme of ['light', 'dark']) {
     await preview.screenshot({path: `/tmp/hlh-reconciliation-preview-${theme}.png`});
     await page.getByLabel('Reconciliation admin token').fill('browser-fixture-only');
     await page.getByRole('button', {name: 'Save session token'}).click();
+    await expect(page.getByText('Admin token saved for this browser session')).toBeVisible();
     page.on('dialog', dialog => dialog.accept());
     await preview.getByRole('button', {name: 'Apply reviewed change'}).click();
     await expect(page.getByRole('cell', {name: /^Matched /})).toBeVisible();

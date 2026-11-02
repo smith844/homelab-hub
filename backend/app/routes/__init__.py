@@ -27,3 +27,5 @@ def register_blueprints(app):
     app.register_blueprint(container_groups_bp)
     from .reconciliation import bp as reconciliation_bp
     app.register_blueprint(reconciliation_bp)
+    from .network_discovery import bp as network_discovery_bp
+    app.register_blueprint(network_discovery_bp)

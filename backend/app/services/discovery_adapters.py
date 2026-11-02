@@ -101,7 +101,7 @@ def network_snapshot(state):
     if kind == "unknown" and rows:
         raise ReconciliationError("Expired scanner response cannot identify result types")
     status = state.get("status", "unknown")
-    if status not in ("running", "completed", "failed", "expired", "unknown"):
+    if status not in ("running", "completed", "partial", "failed", "expired", "unknown"):
         raise ReconciliationError("Unknown scanner job status")
     params = state.get("params") if isinstance(state.get("params"), dict) else {}
     clean = []
@@ -118,5 +118,5 @@ def network_snapshot(state):
         clean.append(item)
     return {"status": "unknown", "complete": False, "coverage": "unknown", "completed_at": None,
             "source": "dpinna13/network-scanner@9feebd5", "containers": [], "fresh": False, "authoritative": False,
-            "reason": "Network results contain hosts/ports, not Docker names or IDs. No container absence can be inferred. The status API also omits scan timestamps.",
-            "network_scan": {"type": kind, "status": status, "target_ip": text(params.get("target_ip"), 64), "results": clean}}
+            "reason": "Network results contain hosts/ports, not Docker names or IDs. No container absence can be inferred; scan status and timestamps remain viewable in Network discovery.",
+            "network_scan": {"type": kind, "status": status, "target_ip": text(params.get("target_ip") or params.get("target"), 64), "results": clean}}

@@ -31,12 +31,14 @@ observations with inventory and offers reviewed container changes.
 - `backend/docker-entrypoint.sh` runs `alembic upgrade head` before serving.
   `create_app()` also calls `db.create_all()`; this does not replace migrations
   when upgrading existing tables.
-- No Docker socket, network scanner or infrastructure credentials are required by
-  the web app. There is no automatic Docker collector or background scan scheduler.
-  A separate host-side exporter (`scripts/docker-snapshot.sh`) produces the uploaded
-  container snapshot contract; it is not wired into the app or scheduled.
-- Reconciliation consumes uploaded JSON. It does not contact Betty or the separate
-  scanner, start scans, or execute scanner import endpoints.
+- No Docker socket or infrastructure credentials are required by the web app. It
+  does not run nmap or Docker collection. A separate host-side exporter
+  (`scripts/docker-snapshot.sh`) produces uploaded container snapshots, and a
+  separate token-authenticated scanner (`scanner/`) performs approved Nmap scans.
+  Neither collector is scheduled by the web app, and neither shares a database.
+- Reconciliation consumes uploaded Docker JSON and read-only network observations.
+  The web app proxies scan start/status to the separate scanner; it never calls the
+  upstream scanner's direct inventory-import endpoints.
 - Group and reconciliation writes require the shared admin token. Legacy inventory,
   import, document and map write APIs remain largely unauthenticated; the app is
   intended for a trusted LAN and is not hardened for public exposure.
@@ -51,6 +53,8 @@ observations with inventory and offers reviewed container changes.
 | Group backups | `services/group_backup.py`, `routes/inventory.py` |
 | Reconciliation | `routes/reconciliation.py`, `services/reconciliation.py` |
 | Reconciliation exclusions | `models/reconciliation.py`, migration `011_reconciliation_exclusions` |
+| Network discovery | `routes/network_discovery.py`, `services/network_discovery.py`, `pages/NetworkDiscoveryPage.svelte` |
+| Network scanner service | `scanner/hlh_scanner/` (target validation, Nmap XML, jobs, HTTP API) |
 | Input/identity adapters | `services/discovery_adapters.py`, `discovery_identity.py`, `network_reconciliation.py` |
 | SPA/navigation | `frontend/src/App.svelte`, `components/Sidebar.svelte` |
 | Management pages | `frontend/src/pages/GroupsPage.svelte`, `ReconciliationPage.svelte` |
@@ -203,54 +207,66 @@ or a new live inspection by the handover agent.
 
 | Finding | Count / interpretation |
 |---------|------------------------|
-| Docker containers discovered | **92** |
-| Matched existing inventory applications | **84** |
-| Discovered but unmatched | **8** |
-| Unmatched breakdown | Current redesign container (**1**), retained rollback containers (**6**), separate network scanner (**1**) |
+| Docker containers discovered | **93** |
+| Represented by application inventory records | **86** |
+| Explicitly excluded historical deployment containers | **7** |
+| Unmatched ordinary containers | **0** |
 | Inventory applications without a discovered container match | **0** |
 | Recorded container/image IDs | Not yet recorded in most inventory entries |
 
-Thus 92 = 84 + 8. The eight do not establish eight missing ordinary applications:
-review policy for the redesign/scanner themselves and retain the six rollback
-containers. **Do not delete backups or automatically add all eight to make counts
-look clean.** A first recorded ID is missing metadata being filled, not proof that
-a resource was recreated. Reviewed bulk metadata reconciliation is still needed.
+Thus 93 = 86 + 7. The seven excluded containers are explicit host-scoped policy
+decisions, not deletion and not proof that the containers are gone. **Do not delete
+backups or automatically add containers to make counts look clean.** A first recorded
+ID is missing metadata being filled, not proof that a resource was recreated.
 
 Earlier seven unmatched FolderView entries and eleven ungrouped apps were separate
-grouping investigation targets; they are not the eight Docker snapshot discrepancies.
+grouping investigation targets; they are not the current Docker snapshot
+discrepancies.
 Their latest counts were not supplied here, and intentional Ungrouped choices remain
 valid. Do not infer they were resolved from the zero unmatched-inventory result.
 
-## Separate Nmap scanner: verified boundary
+## Nmap network discovery: upstream boundary and Phase 5 integration
 
-- Repository: `dpinna13/homelab-hub`.
-- Branch: `feature/network-scanner`.
-- Observed/source-inspected revision: **`9feebd5`**
-  (`9feebd509ae58ad98bc7fc8881100b51e6add357`).
-- Betty container/image: `homelab-hub-scanner`, separate from the redesign app.
-- Source checkout: `/mnt/cache/appdata/homelab-hub-scanner-source`.
+Upstream source: `dpinna13/homelab-hub`, branch `feature/network-scanner`, commit
+**`9feebd509ae58ad98bc7fc8881100b51e6add357`**. Its verified routes are POST
+`/api/scanner/discover`, `/identify`, `/portscan`, `/probe-http`,
+`/import/hardware`, `/import/apps` and GET `/api/scanner/interfaces`,
+`/status/<scan_id>` (all paths after the first share the `/api/scanner` prefix).
+It provides Nmap IPv4 discovery, reverse DNS/MAC hints, device/OS identification,
+TCP port/service scanning and HTTP probing. It **does not discover Docker
+identities, container/image IDs or Docker inventory**, and its jobs are in memory
+(completed/failed expire after 600 seconds).
 
-It provides Nmap-based IPv4 discovery, reverse DNS/MAC hints, device/OS
-identification, TCP port/service scanning and HTTP header/title/name probing.
-It **does not discover Docker identities, container/image IDs, a Docker inventory
-export or Proxmox API inventory**. Do not build a second independent network scanner.
+The Phase 5 integration adapts the sound parts into `scanner/hlh_scanner/` and does
+not copy unsafe behaviour:
 
-Verified routes: POST `/api/scanner/discover`, `/identify`, `/portscan`, `/probe-http`,
-`/import/hardware`, `/import/apps`; GET `/api/scanner/interfaces`, `/status/<scan_id>`
-(all paths after the first share the `/api/scanner` prefix).
+- Reuses the host-discovery flags (`-sn -PR -PE -PS… -PA80`), MAC/vendor parsing,
+  unprivileged `-sT` service scanning and threaded job lifecycle.
+- Replaces `python-nmap`/`requests` with argument-safe `subprocess` + Nmap XML, and
+  adds explicit UTC start/completion timestamps, partial-scan status and bounded
+  retention.
+- Uses explicit approved private IPv4 ranges, max 1024 target addresses, max 256
+  ports, bounded scan duration and concurrency. Targets are never derived from VLAN
+  numbers or interfaces.
+- Prohibits OS fingerprinting/aggressive probes, NSE scripts, HTTP probing and
+  scanner-side database imports. No Docker socket is used.
+- Exposes `POST /api/scanner/scan` and `GET /api/scanner/scan/<id>` behind a shared
+  `X-Scanner-Token`. The web app proxies them through admin-authenticated
+  `/api/network-discovery/scan`; it validates targets independently and never
+  forwards raw nmap flags.
+- Scan status is `completed`, `partial` or `failed`. Partial/failed results remain
+  visible for review but never imply device absence. The existing network adapter
+  classifies observations as matched/unmatched/duplicate/unverified only; network
+  ports are not Docker identities.
+- The Network discovery page shows raw hosts/services, filters and read-only
+  inventory comparison. It does not add inventory, edit records or change map
+  layouts. See [network-discovery.md](network-discovery.md) for exact execution,
+  configuration, API and future supervised Betty prerequisites.
 
-Status responses contain `data` with type/status/progress/results/error/params;
-the implementation omits its internal scan timestamps. Jobs are in memory and
-completed/failed jobs expire after 600 seconds. Network observations cannot establish
-Docker coverage or authoritative container absence. The existing adapter accepts
-these saved status responses and compares hosts by IP/MAC and apps by IP+port,
-within a selected root host. A missing VM address is not guessed from its host.
-
-The scanner import routes write its own process's database directly, without the
-new reconciliation preview/admin safeguards. Do not assume shared databases or
-call these to update HomeLab-Hub inventory. Its existing HTTP probing disables
-TLS verification; do not copy that behaviour into new integrations. Keep discovery,
-transport, comparison and reviewed application of changes separate.
+The upstream direct-import endpoints still must not be called or trusted: they write
+that process's database without HomeLab-Hub's preview/admin safeguards, and its HTTP
+probe disables TLS verification. Keep discovery, transport, comparison and reviewed
+application separate.
 
 ## Betty test deployment and rollback
 
@@ -322,6 +338,7 @@ Run checks in their stated directories with the virtual environment active:
 ```sh
 # checkout root
 python -m pytest -q backend/tests
+python -m pytest -q scanner/tests
 # frontend/
 npm test
 npm run build
@@ -346,13 +363,13 @@ Last full recorded functional validation at `e1e595b` (not rerun for the docs-on
 handover): **106 backend tests, 50 frontend tests, 10 Chromium checks**, production
 frontend build and isolated local API/SPA smoke checks passed. The Docker exporter
 change was validated with **120 backend tests** (14 exporter tests, including real
-`normalise_snapshot` compatibility). The bulk/exclusions change adds **137 backend
-tests** (bulk plans, exclusions, authentication, transaction rollback, freshness and
-data preservation) and **56 frontend unit tests**; the production frontend build and
-the three Reconciliation Playwright checks passed. Other browser specs were not
-rerun. Backend validation used Python 3.12; production Dockerfile uses Python 3.14.
-Existing warnings: SQLAlchemy identity-map warning in inventory import; MapPage
-chunk >500 kB.
+`normalise_snapshot` compatibility). Bulk/exclusions added **137 backend tests**, and
+the Phase 5 network-discovery slice brings the totals to **146 backend tests, 22
+scanner tests and 61 frontend unit tests**; the production frontend build and four
+Reconciliation/Network discovery Playwright checks passed. Other browser specs were
+not rerun. Backend validation used Python 3.12; production Dockerfile uses Python
+3.14. Existing warnings: SQLAlchemy identity-map warning in inventory import;
+MapPage chunk >500 kB.
 
 ## Next development priorities
 
@@ -377,23 +394,27 @@ chunk >500 kB.
    The six rollback containers can now be excluded as operational policy; decisions
    about the active redesign container and scanner remain explicit and are not
    inferred from names.
-4. **Integrate the existing Nmap scanner.** Reuse its verified discovery/probing;
-   define authenticated read-only transport and freshness/provenance without
-   inventing Docker data or sharing databases implicitly. Do not copy its unsafe
-   direct-import or TLS-bypass behaviour.
+4. **Integrate the existing Nmap scanner.** Delivered as a separate
+   token-authenticated scanner service with approved-target validation, bounded
+   host/TCP discovery, status timestamps and read-only comparison. Remaining work is
+   persisted scan history, reviewed inventory/map actions, optional HTTP probing with
+   verified TLS and supervised deployment/scheduling. Do not copy upstream direct
+   imports, OS fingerprinting or TLS bypass.
 5. **Improve dashboard summaries/filtering.** Delivered for Reconciliation:
    matched/unmatched/excluded/uncertain/not-seen summaries plus category and search
    filters while detailed sections remain available. Remaining work is persisted
    scan history and integrations into broader dashboard views.
 
-Recommended next tasks: Nmap integration as a separate discovery source, persisted
-scan history with explicit freshness/provenance, and reviewed bulk handling of
-ambiguous inventory gaps. Use the 92/84/eight/zero baseline for acceptance planning;
-do not hard-code these changing counts into application logic.
+Recommended next tasks: supervised scanner deployment on the Betty test instance,
+persisted scan history/freshness, reviewed inventory/map actions from network
+results, and optional verified-TLS HTTP probing. Use the 93/86/seven/zero baseline
+for acceptance planning; do not hard-code these changing counts into application
+logic.
 
 ## Supporting documentation
 
 - [Phase 4 contract and scanner investigation](phase4-reconciliation.md).
+- [Network discovery architecture, configuration and APIs](network-discovery.md).
 - [Phase 3 implementation report](container-group-management-phase3.md) — historical.
 - [Phase 3 polish and migration review](container-group-polish-review.md) — historical
   development/validation detail, superseded by this handover for current workflow.

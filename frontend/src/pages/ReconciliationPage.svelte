@@ -10,6 +10,7 @@
   let filter = 'all', query = '', busyWrites = false;
   let exclusionName = '', exclusionReason = '';
   let savedToken = getAdminToken(), token = savedToken;
+  let tokenSaved = false;
   const value = v => v === null || v === undefined || v === '' ? '(not recorded)' : String(v);
   const labels = {matched: 'Matched', older_observation: 'Older than recorded observation', missing_inventory: 'Missing from inventory', duplicate: 'Potential duplicate', confirmed_absent: 'Absent in this snapshot', excluded: 'Excluded from warnings', unknown: 'Unknown', unmatched: 'Unmatched', unverified: 'Unverified'};
 
@@ -111,7 +112,10 @@
     } catch (e) { error = e.message; }
     finally { busyWrites = false; }
   }
-  function saveToken() { setAdminToken(token.trim()); savedToken = token.trim(); }
+  function saveToken() {
+    setAdminToken(token.trim()); savedToken = token.trim(); tokenSaved = Boolean(savedToken);
+    if (savedToken) addToast('Admin token saved for this browser session', 'success');
+  }
 </script>
 
 <section class="reconciliation">
@@ -142,7 +146,7 @@
   {#if error}<p role="alert">{error}</p>{/if}
   {#if loading}<p aria-busy="true">Comparing inventory…</p>{/if}
   {#if report}
-    <div class="summary" role="group" aria-label="Reconciliation summary">
+    <div class="summary" role="region" aria-label="Reconciliation summary">
       <button type="button" class="summary-item" class:active={filter === 'matched'} on:click={() => filter = 'matched'}><strong>{summary.matched}</strong> Matched</button>
       <button type="button" class="summary-item" class:active={filter === 'unmatched'} on:click={() => filter = 'unmatched'}><strong>{summary.unmatched}</strong> Unmatched</button>
       <button type="button" class="summary-item" class:active={filter === 'excluded'} on:click={() => filter = 'excluded'}><strong>{summary.excluded}</strong> Excluded</button>
@@ -161,11 +165,11 @@
       <button on:click={reviewBulk} disabled={loading || dirty || !bulkEligible}>Preview bulk metadata update for {summary.matched} matched container{summary.matched === 1 ? '' : 's'}</button>
       {#if !bulkEligible}<small>Bulk updates require a fresh, complete, successful all-container snapshot and at least one confidently matched container.</small>{/if}
       {#if bulkPreview}
-        <div class="preview bulk-preview" role="group" aria-label="Bulk reconciliation preview">
+        <div class="preview bulk-preview" role="region" aria-label="Bulk reconciliation preview">
           <h3>Bulk preview for {bulkPreview.plan.app_count} applications</h3>
           <p>{changeCount} field value{changeCount === 1 ? '' : 's'} will change. The whole reviewed update is applied in one database transaction.</p>
           {#if bulkPreview.plan.skipped?.length}
-            <details><summary>{bulkPreview.plan.skipped.length} observations not eligible</summary>
+            <details><summary>{bulkPreview.plan.skipped.length} observation{bulkPreview.plan.skipped.length === 1 ? '' : 's'} not eligible</summary>
               <ul>{#each bulkPreview.plan.skipped as item}<li><strong>{item.container_name}</strong> — {labels[item.classification] || item.classification}: {item.reason}</li>{/each}</ul>
             </details>
           {/if}
@@ -177,7 +181,6 @@
           </details>
           <button on:click={applyBulk} disabled={loading || !savedToken}>Apply bulk update</button>
           <button class="secondary outline" on:click={() => bulkPreview = null}>Cancel bulk preview</button>
-          {#if !savedToken}<small>Save an admin token below to apply.</small>{/if}
         </div>
       {/if}
     </article>
@@ -272,6 +275,7 @@
   <article><h2>Administrative access</h2>
     <p>Comparison and previews are read-only. Applying bulk updates or changing exclusions requires the configured server admin token. It is stored only in this browser session.</p>
     <div class="controls"><input type="password" aria-label="Reconciliation admin token" bind:value={token} placeholder="Admin token" /><button class="secondary outline" on:click={saveToken}>Save session token</button></div>
+    {#if tokenSaved}<small>Token saved for this browser session.</small>{/if}
   </article>
 </section>
 <style>
@@ -296,6 +300,10 @@
   .summary-item.muted { padding: .45rem .8rem; color: var(--pico-muted-color); }
   .bulk-update h2 { margin-top: 0; }
   .bulk-preview { margin-top: 1rem; padding: 1rem; border: 1px solid var(--pico-primary); }
+  .bulk-preview td:last-child { min-width: 0; }
+  .bulk-preview table { min-width: 0; }
+  .bulk-preview table { width: 100%; }
+  .bulk-preview button { width: auto; margin: .25rem .5rem .25rem 0; }
   .table-scroll { overflow-x: auto; margin-bottom: 1.4rem; }
   table { font-size: .8rem; min-width: 650px; }
   td { vertical-align: top; overflow-wrap: anywhere; }
@@ -307,4 +315,12 @@
   .preview { border-color: var(--pico-primary); }
   .preview td { white-space: pre-wrap; }
   [role="alert"] { border-left: 3px solid var(--pico-primary); padding: .7rem; }
+  @media (max-width: 760px) {
+    .bulk-preview { padding: .7rem; }
+    .bulk-preview table, .bulk-preview thead, .bulk-preview tbody, .bulk-preview tr,
+    .bulk-preview td, .bulk-preview th { display: block; }
+    .bulk-preview thead { display: none; }
+    .bulk-preview tr { border-bottom: 1px solid var(--pico-muted-border-color); padding: .4rem 0; }
+    .bulk-preview td, .bulk-preview th { padding: .15rem 0; }
+  }
 </style>

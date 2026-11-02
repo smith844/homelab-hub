@@ -95,7 +95,7 @@ test('bulk reconciliation, summary filters and persistent exclusions stay review
   });
 
   await page.goto('/#/reconciliation');
-  const summary = page.getByRole('group', {name: 'Reconciliation summary'});
+  const summary = page.getByRole('region', {name: 'Reconciliation summary'});
   await expect(summary).toContainText('0 Matched');
   await page.getByLabel('JSON snapshot file').setInputFiles({name: 'snapshot.json', mimeType: 'application/json',
     buffer: Buffer.from(JSON.stringify({schema_version: 1, host_key: 'betty', status: 'success', complete: true,
@@ -119,6 +119,10 @@ test('bulk reconciliation, summary filters and persistent exclusions stay review
   expect(writes).toBe(0);
   const bulkPreview = page.getByLabel('Bulk reconciliation preview');
   await expect(bulkPreview.getByText('Bulk preview for 2 applications')).toBeVisible();
+  await page.setViewportSize({width: 700, height: 900});
+  expect(await bulkPreview.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+  await bulkPreview.screenshot({path: `${process.env.TEMP || '/tmp'}/hlh-reconciliation-bulk-narrow.png`});
+  await page.setViewportSize({width: 1280, height: 900});
   await expect(bulkPreview.getByRole('button', {name: 'Apply bulk update'})).toBeDisabled();
   await page.getByLabel('Reconciliation admin token').fill('browser-fixture-only');
   await page.getByRole('button', {name: 'Save session token'}).click();

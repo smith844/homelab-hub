@@ -42,9 +42,16 @@ commit `9feebd509ae58ad98bc7fc8881100b51e6add357`, particularly:
 
 This slice adapts saved **actual status JSON** (the `data` wrapper is accepted)
 into read-only IP/MAC or IP+port comparisons within the selected host scope.
-It does not call the scanner, start scans, copy nmap dependencies or call import
-endpoints. A failed HTTP probe remains unverified even if its job completed.
-Network results cannot prove Docker presence/absence or make container changes.
+A failed HTTP probe remains unverified even if its job completed. Network results
+cannot prove Docker presence/absence or make container changes.
+
+Phase 5 adds a separate, token-authenticated Nmap service and a Network discovery
+page. The page starts scans through `/api/network-discovery/scan`, then submits the
+scanner status to this same adapter for comparison. It supports `completed`,
+`partial` and `failed` statuses; partial/failed results stay visible but are
+unverified. The scanner never calls upstream import endpoints and never writes
+inventory. See [network-discovery.md](network-discovery.md) for architecture,
+approved-target configuration, APIs and supervised deployment prerequisites.
 
 ## Separate container input contract
 
@@ -138,9 +145,10 @@ not-seen resources, and the page can filter/search discovered rows without hidin
 the detailed sections.
 
 Snapshots are page-local; there is no persisted scan history, automatic refresh,
-network-resource mutation or trusted live transport yet. Next integration work is
-an authenticated read-only transport for the existing scanner, optional scheduling/
-orchestration of the Docker exporter (including Docker-in-VM host provenance), and
-Nmap-based network discovery as a separate source. This also determines how Betty
-and Blackbox produce authoritative container data; network probing alone cannot
-supply it. No deployment or live collection is authorized by these instructions.
+network-resource mutation or trusted live transport yet. The separate scanner now
+provides authenticated start/status transport and read-only comparison; next work is
+persisted scan history/freshness, reviewed inventory/map actions, optional verified-
+TLS HTTP probing and supervised deployment/scheduling. This also determines how
+Betty and Blackbox produce authoritative container data; network probing alone
+cannot supply it. No deployment or live collection is authorized by these
+instructions.
