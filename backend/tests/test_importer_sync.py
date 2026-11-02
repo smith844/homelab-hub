@@ -380,3 +380,63 @@ def test_non_docker_notes_do_not_match_container_assignments(app):
     # used; the app falls back to its display name and does not match.
     assert report["unmatched_containers"] == ["home-assistant"]
     assert report["ungrouped_apps"] == ["home assistant"]
+
+
+def test_preview_identifies_exact_fields_and_matches_apply(app):
+    source = {"a": {"name": "Tools", "icon": "https://example.org/old.png", "containers": [], "settings": {"expanded": False}}}
+    import_folderview(source, "Betty")
+    group = _group(db.session, "a")
+    source["a"].update(name="Utilities", icon="https://example.org/new.png", updatedAt="today")
+    source["a"]["settings"]["expanded"] = True
+    preview = import_folderview(source, "Betty", dry_run=True)
+    change = preview["group_changes"][0]
+    fields = {entry["field"]: entry for entry in change["fields"]}
+    assert change["external_id"] == "a"
+    assert change["name"] == "Utilities"
+    assert fields["name"] == {"field": "name", "before": "Tools", "after": "Utilities"}
+    assert fields["source_metadata.settings.expanded"]["after"] is True
+    assert fields["source_metadata.updatedAt"]["before"] is None
+    assert group.name == "Tools"
+    assert group.icon == "https://example.org/old.png"
+    applied = import_folderview(source, "Betty")
+    assert applied["group_changes"] == preview["group_changes"]
+    assert group.name == "Utilities"
+    assert group.icon == "https://example.org/new.png"
+    assert import_folderview(source, "Betty")["group_changes"] == []
+
+
+def test_legacy_customisations_survive_repeated_source_updates(app):
+    source = {"a": {"name": "Tools", "icon": "https://example.org/old.png", "containers": []}}
+    import_folderview(source, "Betty")
+    group = _group(db.session, "a")
+    group.customisations_json = None  # Simulate a pre-010 Phase 3 row.
+    group.icon = "🔧"
+    group.sort_order = 42
+    group.color = "#123456"
+    group.active = False
+    db.session.commit()
+    source["a"]["icon"] = "https://example.org/new.png"
+    for _ in range(2):
+        report = import_folderview(source, "Betty")
+        assert report["groups"]["reactivated"] == 0
+        assert {entry["field"] for entry in report["group_changes"][0]["preserved"]} == {"icon", "sort_order", "active"}
+        assert (group.icon, group.sort_order, group.color, group.active) == ("🔧", 42, "#123456", False)
+    assert json.loads(group.metadata_json)["icon"] == source["a"]["icon"]
+
+
+def test_archive_changes_are_explained(app):
+    import_folderview({"a": {"name": "Tools", "containers": []}}, "Betty")
+    preview = import_folderview({}, "Betty", dry_run=True)
+    assert preview["group_changes"] == [{"external_id": "a", "name": "Tools", "action": "archive", "fields": [{"field": "active", "before": True, "after": False}], "preserved": []}]
+    assert _group(db.session, "a").active is True
+
+
+def test_metadata_key_order_is_not_a_change_but_new_null_field_is(app):
+    source = {"a": {"name": "Tools", "containers": []}}
+    import_folderview(source, "Betty")
+    reordered = {"a": {"containers": [], "name": "Tools"}}
+    assert import_folderview(reordered, "Betty", dry_run=True)["groups"]["unchanged"] == 1
+    source["a"]["optional"] = None
+    report = import_folderview(source, "Betty", dry_run=True)
+    assert report["groups"]["updated"] == 1
+    assert any(field["field"] == "source_metadata.optional" for field in report["group_changes"][0]["fields"])

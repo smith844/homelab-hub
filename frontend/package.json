@@ -7,17 +7,20 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node --test tests/*.test.js"
+    "test": "node --test tests/*.test.js",
+    "test:browser": "playwright test"
   },
   "dependencies": {
-    "bytemd": "^1.21.0",
     "@bytemd/plugin-gfm": "^1.21.0",
     "@bytemd/plugin-highlight": "^1.21.0",
+    "bytemd": "^1.21.0",
     "cytoscape": "^3.30.4",
     "cytoscape-dagre": "^2.5.0",
     "svelte-spa-router": "^4.0.1"
   },
   "devDependencies": {
+    "@picocss/pico": "^2.1.1",
+    "@playwright/test": "^1.64.1",
     "@sveltejs/vite-plugin-svelte": "^3.1.0",
     "svelte": "^4.2.19",
     "vite": "^5.4.0"

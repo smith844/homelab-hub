@@ -34,3 +34,7 @@ test('map view selector uses theme control tokens instead of the button-local pi
   assert.match(mapPage, /\.view-toggle button:focus-visible/);
   assert.match(mapPage, /\.view-toggle button:disabled/);
 });
+
+test('fixed-height buttons centre labels with bounded vertical padding', () => {
+  assert.match(theme, /button,\s*\[role="button"\][^{]*\{[^}]*display: inline-flex;[^}]*align-items: center;[^}]*justify-content: center;[^}]*box-sizing: border-box;[^}]*line-height: 1.25;[^}]*padding-block: .45rem;/);
+});

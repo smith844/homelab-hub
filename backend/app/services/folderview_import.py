@@ -21,6 +21,8 @@ from .group_identity import (
     normalize_identity,
 )
 
+from .group_customisations import group_customisations
+
 SOURCE = "folderview"
 MAX_CONFIG_BYTES = 5 * 1024 * 1024
 
@@ -174,15 +176,49 @@ def _folder_payload(folder):
     }
 
 
-def _group_matches(group, folder):
+def _field_changes(before, after, prefix=""):
+    """Compare JSON structurally, including individual raw source fields."""
+    changes = []
+    for key in sorted(before.keys() | after.keys()):
+        old, new = before.get(key), after.get(key)
+        path = f"{prefix}{key}"
+        if isinstance(old, dict) and isinstance(new, dict):
+            changes.extend(_field_changes(old, new, path + "."))
+        elif old != new or type(old) is not type(new) or (key in before) != (key in after):
+            change = {"field": path, "before": old, "after": new}
+            if key not in before:
+                change["before_present"] = False
+            if key not in after:
+                change["after_present"] = False
+            changes.append(change)
+    return changes
+
+
+def _group_plan(group, folder):
     payload = _folder_payload(folder)
-    return (
-        group.name == payload["name"]
-        and (group.external_parent_id or "") == (payload["external_parent_id"] or "")
-        and (group.icon or None) == payload["icon"]
-        and group.sort_order == payload["sort_order"]
-        and (group.metadata_json or "") == payload["metadata_json"]
-    )
+    payload["active"] = True
+    customisations = group_customisations(group) if group else set()
+    preserved = []
+    for field in sorted(customisations):
+        if field in payload:
+            if getattr(group, field) != payload[field]:
+                preserved.append({"field": field, "local": getattr(group, field), "incoming": payload[field]})
+            payload[field] = getattr(group, field)
+    before = {key: getattr(group, key) for key in payload} if group else {}
+    # Raw metadata remains source-only, separate from effective presentation.
+    old_meta = json.loads(before.pop("metadata_json", None) or "{}")
+    after = {key: value for key, value in payload.items() if key != "metadata_json"}
+    changes = _field_changes(before, after)
+    changes.extend(_field_changes(old_meta, folder["metadata"], "source_metadata."))
+    if group is None:
+        action = "create"
+    elif not group.active and payload["active"]:
+        action = "reactivate"
+    else:
+        action = "update" if changes else "unchanged"
+    return {"action": action, "folder": folder, "group": group,
+            "payload": payload, "fields": changes, "preserved": preserved,
+            "customisations": sorted(customisations)}
 
 
 def build_import_plan(session, parsed, host_key, host_label):
@@ -204,15 +240,7 @@ def build_import_plan(session, parsed, host_key, host_label):
     group_changes = []
     for folder in folders:
         group = existing_by_external.get(folder["external_id"])
-        if group is None:
-            action = "create"
-        elif not group.active:
-            action = "reactivate"
-        elif _group_matches(group, folder):
-            action = "unchanged"
-        else:
-            action = "update"
-        group_changes.append({"action": action, "folder": folder, "group": group})
+        group_changes.append(_group_plan(group, folder))
 
     archive_changes = [
         {"action": "archive", "group": group}
@@ -298,7 +326,7 @@ def execute_import_plan(session, plan):
 
     for change in plan["group_changes"]:
         folder = change["folder"]
-        payload = _folder_payload(folder)
+        payload = change["payload"]
         action = change["action"]
         group = change["group"]
         if action == "create":
@@ -306,17 +334,14 @@ def execute_import_plan(session, plan):
                 source=SOURCE,
                 host_key=plan["host_key"],
                 external_id=folder["external_id"],
-                active=True,
+                customisations_json="[]",
                 **payload,
             )
             session.add(group)
-        elif action in ("update", "reactivate"):
-            group.name = payload["name"]
-            group.external_parent_id = payload["external_parent_id"]
-            group.icon = payload["icon"]
-            group.sort_order = payload["sort_order"]
-            group.metadata_json = payload["metadata_json"]
-            group.active = True
+        else:
+            for field, value in payload.items():
+                setattr(group, field, value)
+            group.customisations_json = json.dumps(change["customisations"])
         if group is not None:
             folder_to_group[folder["external_id"]] = group
 
@@ -377,11 +402,14 @@ def build_import_report(session, parsed, plan, dry_run):
     active_after = {}
     for group in session.query(ContainerGroup).all():
         if group.source == SOURCE and group.host_key == plan["host_key"]:
-            active_after[group.id] = group.external_id in plan["incoming_ids"]
+            active_after[group.id] = next(
+                (change["payload"]["active"] for change in plan["group_changes"] if change["group"] is group), False
+            )
         else:
             active_after[group.id] = bool(group.active)
 
-    effective = set(plan["desired"].keys())
+    active_folders = {change["folder"]["external_id"] for change in plan["group_changes"] if change["payload"]["active"]}
+    effective = {key for key, wanted in plan["desired"].items() if wanted["folder_id"] in active_folders}
     for override in plan["overrides"]:
         if override.group_id is None:
             effective.discard(override.container_key)
@@ -413,6 +441,16 @@ def build_import_report(session, parsed, plan, dry_run):
         "host": host,
         "folders": {"total": len(parsed["folders"])},
         "groups": groups,
+        "group_changes": [
+            {"external_id": change["folder"]["external_id"], "name": change["folder"]["name"],
+             "action": change["action"], "fields": change["fields"], "preserved": change["preserved"]}
+            for change in plan["group_changes"]
+            if change["action"] != "unchanged" or change["preserved"]
+        ] + [
+            {"external_id": change["group"].external_id, "name": change["group"].name,
+             "action": "archive", "fields": [{"field": "active", "before": True, "after": False}], "preserved": []}
+            for change in plan["archive_changes"]
+        ],
         "assignments": assignments,
         "overrides": {"untouched": len(plan["overrides"])},
         "conflicts": parsed["conflicts"],

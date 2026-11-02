@@ -23,6 +23,7 @@ class ContainerGroup(BaseMixin, db.Model):
     sort_order = db.Column(db.Integer, nullable=False, default=0)
     active = db.Column(db.Boolean, nullable=False, default=True)
     metadata_json = db.Column(db.Text)
+    customisations_json = db.Column(db.Text)
 
     assignments = db.relationship(
         "ContainerGroupAssignment",

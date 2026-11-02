@@ -1,3 +1,4 @@
+import { groupIcon } from "./groupIcons.js";
 import { placementEdges } from "./mapViews.js";
 
 const WHITESPACE_RE = /\s+/g;
@@ -243,7 +244,7 @@ export function buildGroupedGraph(filtered, grouping) {
         label:
           slot.kind === "ungrouped"
             ? `Ungrouped · ${host} · ${slot.total}`
-            : `${slot.icon ? `${slot.icon} ` : ""}${slot.name} · ${slot.total}`,
+            : `${slot.icon ? `${groupIcon(slot.icon).text || ""} ` : ""}${slot.name} · ${slot.total}`,
         type: "group",
         kind: slot.kind,
         groupId: slot.groupId,
@@ -254,6 +255,7 @@ export function buildGroupedGraph(filtered, grouping) {
         parentIds,
         color: slot.color,
         ...(slot.color ? { groupColor: slot.color } : {}),
+        ...(groupIcon(slot.icon).image ? { groupImage: groupIcon(slot.icon).image } : {}),
         sortOrder: slot.sortOrder,
         totalMembers: slot.total,
         visibleMembers: members.length,
