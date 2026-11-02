@@ -1,5 +1,7 @@
 <script>
   import { onMount } from "svelte";
+  import GroupIcon from "../components/GroupIcon.svelte";
+  const previewValue = (value) => value === undefined || value === null ? "(empty)" : typeof value === "object" ? JSON.stringify(value, null, 2) : String(value);
   import { get, post, put, del } from "../lib/api.js";
   import { addToast } from "../lib/stores.js";
   import { adminHeaders, getAdminToken, setAdminToken } from "../lib/admin.js";
@@ -128,6 +130,10 @@
         sort_order: Number(editForm.sort_order) || 0,
       };
       if (group.source === "manual") payload.name = editForm.name;
+      // Saving a colour change must not pin unchanged imported icon/order fields.
+      for (const field of Object.keys(payload)) {
+        if (payload[field] === (group[field] ?? null)) delete payload[field];
+      }
       await put(`/container-groups/${group.id}`, payload, { headers: adminHeaders() });
       editingId = null;
       await load();
@@ -299,7 +305,7 @@
           </select>
         </label>
         <label>Colour<input type="color" bind:value={newGroup.color} /></label>
-        <label>Icon<input type="text" bind:value={newGroup.icon} maxlength="8" placeholder="Emoji or symbol" /></label>
+        <label>Icon<input type="text" bind:value={newGroup.icon} maxlength="100000" placeholder="Image URL or emoji" /></label>
         <label>Sort<input type="number" bind:value={newGroup.sort_order} /></label>
         <button on:click={createGroup} disabled={busy || !canWrite}>Create group</button>
       </div>
@@ -327,7 +333,7 @@
                 <tr class:archived={!group.active}>
                   <td>
                     <span class="color-dot" style={`background:${group.color || "transparent"}`}></span>
-                    {#if group.icon}<span class="group-icon">{group.icon}</span>{/if}
+                    <GroupIcon value={group.icon} />
                     <strong>{group.name}</strong>
                   </td>
                   <td>
@@ -362,7 +368,7 @@
                           {#if group.source !== "manual"}<small>Imported names are managed by FolderView.</small>{/if}
                         </label>
                         <label>Colour<input type="color" bind:value={editForm.color} /></label>
-                        <label>Icon<input type="text" bind:value={editForm.icon} maxlength="8" /></label>
+                        <label>Icon<input type="text" bind:value={editForm.icon} maxlength="100000" placeholder="Image URL or emoji" /></label>
                         <label>Sort<input type="number" bind:value={editForm.sort_order} /></label>
                         <div class="edit-actions">
                           <button on:click={() => saveEdit(group)} disabled={busy || !canWrite}>Save</button>
@@ -507,6 +513,28 @@
             <li>Assignments: {syncReport.assignments.added} added, {syncReport.assignments.moved} moved, {syncReport.assignments.removed} removed, {syncReport.assignments.unchanged} unchanged</li>
             <li>Manual overrides untouched: {syncReport.overrides.untouched}</li>
           </ul>
+          <h3>Group changes</h3>
+          <p>Source metadata records the FolderView snapshot. Local icons, ordering, colours and archive choices are preserved.</p>
+          {#each syncReport.group_changes || [] as change}
+            <details open>
+              <summary>{change.name} ({change.external_id}) — {change.action}</summary>
+              <div class="table-scroll">
+                <table class="data-table change-table">
+                  <thead><tr><th>Field</th><th>Before</th><th>After</th></tr></thead>
+                  <tbody>
+                    {#each change.fields as field}
+                      <tr><td>{field.field}</td><td><pre>{field.before_present === false ? "(absent)" : previewValue(field.before)}</pre></td><td><pre>{field.after_present === false ? "(absent)" : previewValue(field.after)}</pre></td></tr>
+                    {/each}
+                  </tbody>
+                </table>
+              </div>
+              {#each change.preserved as field}
+                <p><strong>{field.field} — local choice preserved.</strong> Local: {previewValue(field.local)} · FolderView: {previewValue(field.incoming)}</p>
+              {/each}
+            </details>
+          {:else}
+            <p>No group field changes.</p>
+          {/each}
           {#if syncReport.conflicts.length}
             <p><strong>Conflicts:</strong> {syncReport.conflicts.length}</p>
           {/if}
@@ -559,7 +587,6 @@
   .actions-col { width: 1%; white-space: nowrap; }
   .group-actions { display: flex; flex-wrap: wrap; gap: .35rem; }
   .group-actions button { margin: 0; padding: .25rem .5rem; font-size: .68rem; }
-  .group-icon { margin-right: .25rem; }
   .counts { white-space: nowrap; }
   .color-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; border: 1px solid var(--pico-muted-border-color); margin-right: .35rem; vertical-align: middle; }
   .badge { display: inline-block; padding: .15rem .5rem; border-radius: 999px; font-size: .65rem; font-weight: 650; background: var(--hlh-tint); color: var(--pico-primary); }
@@ -570,6 +597,8 @@
   .sync-controls label { margin: 0; font-size: .72rem; }
   .sync-controls button { margin: 0; }
   .sync-report { margin-top: 1rem; font-size: .78rem; }
+  .change-table pre { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 28rem; margin: 0; padding: .3rem; color: var(--hlh-control-fg); }
+  .sync-report details p { overflow-wrap: anywhere; }
   .sync-report ul { margin: .4rem 0; }
   .sync-report p { margin: .3rem 0; }
   @media (max-width: 700px) {

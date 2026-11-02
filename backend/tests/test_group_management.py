@@ -497,3 +497,26 @@ def test_sync_is_protected_and_requires_a_configured_path(app, client):
         json={"host_key": "Betty", "dry_run": True},
         headers=ADMIN_HEADERS,
     ).status_code == 503
+
+
+def test_sync_preserves_explicit_local_choices_and_backup(app, client):
+    from app.services.group_backup import export_group_data, import_group_data
+    _seed(app)
+    group = _group("AI")
+    response = client.put(f"/api/container-groups/{group.id}", headers=ADMIN_HEADERS,
+                          json={"icon": None, "sort_order": 0, "active": False, "color": "#abcdef"})
+    assert response.status_code == 200
+    backup = export_group_data(db.session)
+    import_group_data(db.session, backup)
+    db.session.commit()
+    group = _group("AI")
+    source = {"folder-ai": {"name": "AI renamed", "icon": "https://example.org/image.png", "containers": ["open-webui"]}}
+    report = import_folderview(source, "Betty", dry_run=True)
+    assert "open-webui" in report["ungrouped_apps"]
+    import_folderview(source, "Betty")
+    assert group.icon is None
+    assert group.sort_order == 0
+    assert group.active is False
+    assert group.color == "#abcdef"
+    assert group.name == "AI renamed"
+    assert set(json.loads(group.customisations_json)) == {"icon", "sort_order", "active"}

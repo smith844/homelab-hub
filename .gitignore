@@ -49,3 +49,7 @@ Thumbs.db
 
 # Misc
 enhancements.txt
+
+# Browser test output
+frontend/test-results/
+frontend/playwright-report/

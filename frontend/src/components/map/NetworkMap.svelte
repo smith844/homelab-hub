@@ -241,6 +241,18 @@
             },
           },
           {
+            selector: "node[groupImage]",
+            style: {
+              "background-image": "data(groupImage)",
+              "background-image-crossorigin": "anonymous",
+              "background-fit": "contain",
+              "background-width": "28px",
+              "background-height": "28px",
+              "background-position-y": "12px",
+              "text-margin-y": 18,
+            },
+          },
+          {
             selector: "node[groupColor]",
             style: {
               "border-width": 3,

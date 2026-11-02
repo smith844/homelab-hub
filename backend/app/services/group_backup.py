@@ -81,6 +81,7 @@ def export_group_data(session):
                 "sort_order": group.sort_order,
                 "active": bool(group.active),
                 "metadata": _metadata_to_json(group.metadata_json),
+                "customisations": _metadata_to_json(group.customisations_json),
             }
         )
 
@@ -169,6 +170,7 @@ def import_group_data(session, payload):
             sort_order=entry.get("sort_order") or 0,
             active=bool(entry.get("active", True)),
             metadata_json=_metadata_from_json(entry.get("metadata")),
+            customisations_json=_metadata_from_json(entry.get("customisations")),
         )
         session.add(group)
         key_to_group[key] = group

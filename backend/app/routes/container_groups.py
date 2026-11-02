@@ -5,6 +5,7 @@ the inventory API. Mutating endpoints require ``HLH_ADMIN_TOKEN``; when it is no
 configured, writes are disabled. FolderView source files are only ever read.
 """
 
+import json
 import re
 from collections import Counter
 
@@ -28,6 +29,7 @@ from ..services.group_identity import (
     normalize_identity,
 )
 from ..services.group_resolution import effective_group
+from ..services.group_customisations import group_customisations
 
 bp = Blueprint("container_groups", __name__, url_prefix="/api/container-groups")
 
@@ -380,6 +382,7 @@ def update_group(group_id):
         return _error("Group not found", 404)
     try:
         data = _json_body()
+        customisations = group_customisations(group) if group.source == "folderview" else set()
         if "name" in data:
             name = _clean_name(data.get("name"))
             if group.source != "manual" and normalize_identity(name) != normalize_identity(group.name):
@@ -395,6 +398,9 @@ def update_group(group_id):
             group.sort_order = _clean_sort_order(data.get("sort_order"))
         if "active" in data:
             group.active = _clean_bool(data.get("active"), "active")
+        if group.source == "folderview":
+            customisations.update(field for field in ("icon", "sort_order", "active") if field in data)
+            group.customisations_json = json.dumps(sorted(customisations))
         session.commit()
     except ValidationError as exc:
         session.rollback()

@@ -1,1 +1,12 @@
 html{--hlh-tint:#e9f3f4;--hlh-control-fg:var(--pico-contrast);--hlh-control-muted:var(--pico-muted-color);--hlh-control-border:var(--pico-muted-border-color);--hlh-control-hover-bg:var(--hlh-tint);--hlh-control-active-fg:var(--pico-primary-inverse);--hlh-control-active-bg:var(--pico-primary-background);--hlh-control-focus:var(--pico-primary);--pico-font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;--pico-font-size:17px;--pico-border-radius:8px;--pico-primary:#126e77;--pico-primary-background:#126e77;--pico-primary-hover-background:#105e66;--pico-primary-inverse:#fff}html[data-theme="light"]{--pico-background-color:#f5f7fa;--pico-card-background-color:#fff;--pico-color:#25384a;--pico-muted-color:#637487;--pico-muted-border-color:#dce4ec}html[data-theme="dark"]{--hlh-tint:#183d48;--pico-background-color:#101b27;--pico-card-background-color:#172635;--pico-color:#e3ecf4;--pico-muted-color:#a5b6c7;--pico-muted-border-color:#304558;--pico-primary:#74d2cb;--pico-primary-background:#207f86;--pico-primary-hover-background:#26929a;--pico-primary-inverse:#fff}button:focus-visible,a:focus-visible{outline:2px solid var(--pico-primary);outline-offset:3px}
+/* Fixed-height controls must not retain Pico's full-size vertical padding. */
+button, [role="button"], input[type="submit"], input[type="button"], input[type="reset"] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  line-height: 1.25;
+  padding-block: .45rem;
+}
+html[data-theme="light"] { --pico-contrast: #25384a; }
+html[data-theme="dark"] { --pico-contrast: #e3ecf4; }
