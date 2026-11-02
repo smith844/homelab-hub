@@ -86,7 +86,7 @@ for (const theme of ['light', 'dark']) {
     const card = await page.locator('.cy-container').evaluate(el => {
       const cy = el._cyreg.cy;
       const node = cy.nodes('[type="group"]').first();
-      return {label: node.data('label'), image: node.style('background-image'), width: node.width()};
+      return {label: node.data('label'), image: node.data('groupImage'), width: node.width()};
     });
     expect(card.label).toContain('Media');
     expect(card.label).not.toContain('https:');
@@ -185,8 +185,79 @@ for (const theme of ['light', 'dark']) {
     await page.screenshot({path: `/tmp/hlh-grouped-card-${theme}.png`, fullPage: true});
     await page.getByRole('button', {name: 'Graph', exact: true}).click();
     await expect.poll(() => canvas.evaluate(el => {
-      const cy = el._cyreg.cy;
-      return {groups: cy.nodes('[type="group"]').length, appHeight: cy.getElementById('apps-1').height()};
+      const cy = el._cyreg?.cy;
+      return cy ? {groups: cy.nodes('[type="group"]').length, appHeight: cy.getElementById('apps-1').height()} : null;
     })).toEqual({groups: 0, appHeight: 48});
+  });
+}
+
+const folderviewBase = 'https://raw.githubusercontent.com/hernandito/unRAID-Docker-Folder-Animated-Icons---Alternate-Colors/master/Pale-Collection/';
+for (const theme of ['light', 'dark']) {
+  test(`${theme}: complete FolderView shield and AI SVGs at multiple zoom levels`, async ({page}) => {
+    await setup(page, theme);
+    const groups = [
+      {...group, id: 7, name: 'IAM and Security', icon: `${folderviewBase}pale-privacy.svg`},
+      {...group, id: 8, name: 'AI', icon: `${folderviewBase}pale-ai3.svg`},
+    ];
+    for (const [index, name] of ['shield', 'ai'].entries()) {
+      // Original user-specified SVG bytes are checked in as offline fixtures.
+      // Pause their CSS animations only in test responses for stable screenshots.
+      const source = readFileSync(new URL(`./fixtures/${name}.svg`, import.meta.url), 'utf8');
+      await page.route(groups[index].icon, route => route.fulfill({contentType: 'image/svg+xml',
+        body: source.replace('</svg>', '<style>*{animation-play-state:paused!important}</style></svg>'),
+        headers: {'Access-Control-Allow-Origin': '*'}}));
+    }
+    await page.route('**/api/map/graph', route => route.fulfill({json: {
+      nodes: [graph.nodes[0], graph.nodes[1], {data: {id: 'apps-2', type: 'apps', entity_id: 2, label: 'AI app'}}],
+      edges: [...graph.edges, {data: {id: 'e2', source: 'hardware-1', target: 'apps-2', relation: 'placement'}}],
+    }}));
+    await page.route('**/api/container-groups/effective', route => route.fulfill({json: {
+      groups, memberships: [{group_id: 7, host_key: 'betty', app_id: 1}, {group_id: 8, host_key: 'betty', app_id: 2}],
+      unmatched: [], ungrouped_apps: [],
+    }}));
+    await page.goto('/#/map');
+    await page.getByRole('button', {name: 'Grouped', exact: true}).click();
+    const canvas = page.locator('.cy-container');
+    await expect.poll(() => canvas.evaluate(el => el._cyreg.cy.nodes('[type="group"]').length)).toBe(2);
+    await expect.poll(() => canvas.evaluate(el => el._cyreg.cy.nodes('[type="group"]').some(node => !node.data('groupImagePrepared') || node.backgrounding()))).toBe(false);
+    await canvas.scrollIntoViewIfNeeded();
+    for (const zoom of [0.75, 1, 2]) {
+      await canvas.evaluate((el, zoom) => {
+        const cy = el._cyreg.cy;
+        cy.getElementById('group-7@betty').position({x: 120, y: 92});
+        cy.getElementById('group-8@betty').position({x: 360, y: 92});
+        cy.zoom(zoom); cy.pan({x: 0, y: 0});
+      }, zoom);
+      const rect = await canvas.boundingBox();
+      await expect(page).toHaveScreenshot(`grouped-svg-${theme}-${zoom}.png`, {
+        clip: {x: rect.x + 10 * zoom, y: rect.y + 34 * zoom, width: 460 * zoom, height: 116 * zoom}, maxDiffPixels: 30,
+      });
+      // Compare the actual full SVG pixels with an independent five-argument
+      // browser draw at the same zoom; the former source-rectangle crop fails
+      // this assertion even if a clipped image is accidentally blessed in a snapshot.
+      const differences = await canvas.evaluate(async (el, icons) => {
+        const cy = el._cyreg.cy, zoom = cy.zoom(), size = 24 * zoom;
+        const output = new Image(); output.src = cy.png({full: false, scale: 1}); await output.decode();
+        const actual = document.createElement('canvas'); actual.width = output.width; actual.height = output.height;
+        const ac = actual.getContext('2d'); ac.drawImage(output, 0, 0);
+        return Promise.all(icons.map(async (icon, i) => {
+          const node = cy.getElementById(`group-${7 + i}@betty`);
+          const img = new Image(); img.crossOrigin = 'anonymous'; img.src = icon; await img.decode();
+          const expected = document.createElement('canvas'); expected.width = expected.height = size;
+          const ec = expected.getContext('2d'); ec.fillStyle = node.style('background-color'); ec.fillRect(0, 0, size, size);
+          ec.drawImage(img, 0, 0, size, size);
+          const x = node.renderedPosition('x') - size / 2;
+          const y = node.renderedPosition('y') - node.renderedHeight() / 2 + 10 * zoom;
+          const pixels = ac.getImageData(x, y, size, size).data;
+          const reference = ec.getImageData(0, 0, size, size).data;
+          let different = 0;
+          for (let p = 0; p < pixels.length; p += 4) {
+            if ([0, 1, 2].some(channel => Math.abs(pixels[p + channel] - reference[p + channel]) > 25)) different++;
+          }
+          return {icon, different, total: size * size};
+        }));
+      }, groups.map(g => g.icon));
+      for (const image of differences) expect(image.different / image.total, JSON.stringify({zoom, ...image})).toBeLessThan(0.08);
+    }
   });
 }

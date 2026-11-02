@@ -1,6 +1,7 @@
 <script>
   import { onMount, onDestroy } from "svelte";
   import cytoscape from "cytoscape";
+  import { prepareGroupIcon } from "../../lib/groupIcons.js";
   import { get } from "../../lib/api.js";
   import { addToast } from "../../lib/stores.js";
   import { theme, readPreference, savePreference } from "../../lib/preferences.js";
@@ -244,25 +245,27 @@
             selector: 'node[type="group"][groupImage]',
             style: {
               // Keep the 220 x 92 card footprint used by layouts and anchors.
-              // Icon: y=8..32; text begins at y=40, with room for a wrapped
+              // Icon: y=10..34; text begins at y=42, with room for a wrapped
               // two-line name and a separate membership-count line.
               label: node => {
                 const name = node.data("label").trim().replace(/ · \d+$/, "");
                 const count = node.data("totalMembers");
                 return `${name}\n${count} member${count === 1 ? "" : "s"}`;
               },
-              "background-image": "data(groupImage)",
+              // Show the readable card label while the complete image is decoded.
+              "background-image": node => node.data("groupImagePrepared") || "none",
               "background-image-crossorigin": "anonymous",
               "background-fit": "none",
               "background-width": "24px",
               "background-height": "24px",
               "background-position-x": "50%",
-              "background-position-y": "8px",
+              "background-position-y": "10px",
+              "background-clip": "node",
               "font-size": "12px",
               "line-height": 1.2,
               "text-justification": "center",
               "text-valign": "bottom",
-              "text-margin-y": -52,
+              "text-margin-y": -50,
             },
           },
           {
@@ -326,6 +329,17 @@
         minZoom: 0.1,
         maxZoom: 3,
       });
+
+      if (mode === "grouped") {
+        const images = new Map();
+        cy.nodes('[type="group"][groupImage]').forEach(node => {
+          const source = node.data("groupImage");
+          if (!images.has(source)) images.set(source, prepareGroupIcon(source));
+          images.get(source).then(image => {
+            if (!disposed && cy && !cy.destroyed()) node.data("groupImagePrepared", image);
+          }).catch(() => { /* The group name/count remain the fallback. */ });
+        });
+      }
 
       // Keep the canvas dimensions in sync without touching the user's view.
       if (typeof ResizeObserver !== "undefined") {
