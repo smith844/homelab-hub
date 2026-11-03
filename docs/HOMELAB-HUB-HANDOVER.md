@@ -169,6 +169,11 @@ logic survived the polish changes. Theme tokens and button alignment cover both
 light and dark modes. Playwright covers real canvas output, wrapping, anchors,
 expansion, Graph/Tree controls, and exact SVG fixtures at 75%, 100% and 200% zoom.
 
+Map depth filtering applies to both a selected top-level host and **All hosts**:
+level 0 is the top-level placement record and each child adds one level. Custom
+member selections bypass depth. Ancestor nodes remain visible for context after
+type and search filters.
+
 Browser-local keys include `hlh.mapViews`, `hlh.mapCurrent`,
 `hlh.mapLayout.<signature>`, `hlh.mapLayoutGrouped.<signature>`,
 `hlh.mapGroupAnchors.<signature>`, `hlh.mapGroupExpanded`, `hlh.sidebarToolsOpen`,
@@ -422,7 +427,7 @@ change was validated with **120 backend tests** (14 exporter tests, including re
 `normalise_snapshot` compatibility). Bulk/exclusions added **137 backend tests**, and
 the Phase 5 network-discovery slice, including persistent scan tracking and the
 collapsible sidebar Tools group, brings the totals to **196 backend tests, 22 scanner
-tests and 71 frontend unit tests**; the production frontend build and all **9 Network
+tests and 75 frontend unit tests**; the production frontend build and all **9 Network
 discovery/persistence/sidebar Playwright checks** passed. A focused browser run of
 all 12 Network discovery, Reconciliation and sidebar checks also passed. The last
 full browser run (before this sidebar slice) passed **16 of 18** checks: the two

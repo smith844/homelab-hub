@@ -21,7 +21,7 @@ export function filterGraph(graph, { root = "", types = TYPES, query = "", membe
   const placement = placementEdges({ nodes, edges });
   const all = new Set(nodes.map(n => n.data.id));
   let scope = new Set(all);
-  const levels = new Map();
+  let levels = new Map();
   if (members.length) scope = new Set(members.filter(id => all.has(id)));
   else if (root) {
     scope = new Set(all.has(root) ? [root] : []); levels.set(root, 0);
@@ -32,11 +32,15 @@ export function filterGraph(graph, { root = "", types = TYPES, query = "", membe
         if (!scope.has(id)) { scope.add(id); levels.set(id, levels.get(queue[i]) + 1); queue.push(id); }
       }
     }
+  } else if (depth !== "all") {
+    // With no selected host, depth still follows the placement forest:
+    // top-level records are level 0 and each child adds one level.
+    levels = layoutLevels({ nodes, edges }, placement);
   }
   const search = query.trim().toLowerCase();
   const matches = nodes.filter(n => scope.has(n.data.id) && types.includes(n.data.type) &&
     (!search || `${n.data.rawName || n.data.label || ""} ${n.data.networkName || ""}`.toLowerCase().includes(search)) &&
-    (depth === "all" || !root || members.length || levels.get(n.data.id) <= Number(depth)));
+    (depth === "all" || members.length || (levels.get(n.data.id) ?? 0) <= Number(depth)));
   const keep = new Set(matches.map(n => n.data.id));
   // Keep ancestors for orientation, even when their type is unchecked.
   for (const n of matches) {
