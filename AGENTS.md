@@ -14,6 +14,57 @@ plugins, published environment, fixed workspace path or particular model is requ
   inventory apps. Most runtime/image IDs are not yet recorded. These are historical
   observations, not hard-coded targets or permission to add/delete resources.
 
+## Current focus and next-session handover (3 November 2026)
+- **Core purpose:** HomeLab-Hub is a readable, attractive, user-maintained visual
+  reference for the owner's homelab: what devices/services exist, where they run,
+  how they relate, and useful configuration details. Prioritise **Maps, Inventory,
+  and presentation** over additional automation or discovery machinery. The owner
+  explicitly wants to avoid growing this into an unnecessarily complex tool.
+- Keep changes small, focused and reversible; prefer correcting inventory data
+  or simplifying UI over new background systems, matching rules, migrations or
+  integrations. Treat Nmap/UniFi discovery and Docker reconciliation as
+  **optional supporting tools**, not the main workflow. No new discovery features
+  are requested at present.
+- The existing sidebar has a visually separated, collapsible **Tools** group
+  containing Network discovery and Reconciliation. Its state is remembered, a
+  selected tool automatically expands it, and the scan-running indicator persists.
+  The owner confirmed this on the Betty **test** instance.
+- Network discovery scan state survives in-tab navigation and browser refresh;
+  the owner confirmed both the running indicator and completed results persist.
+  UniFi read-only enrichment was verified against the owner's local UCG Max.
+  Do not rework these completed features without a specific defect/request.
+- Map **Depth** now applies to **All hosts** as well as selected hosts: level 0
+  represents top-level placement records, with one level per child. Commit
+  `9f9a5a63a920f16a07c3439ef54b69e6b1abc2d3` fixes the earlier all-hosts
+  bypass. The owner visually confirmed **Host only** shows Betty and Blackbox,
+  while **One level** displays their immediate children. A few Docker apps
+  appeared at level 1 due to **inventory parent assignments**, not a depth bug.
+  Preserve ancestor context, selected-member semantics, saved layouts and filters.
+- Two identically named `Docker` inventory runtime records exist: Unraid/Betty
+  (`192.168.1.80`) and the Proxmox-hosted Docker LXC/Blackbox
+  (`192.168.1.200`). They are distinct runtime records; never merge them.
+  The `homelab-hub-redesign` app was observed assigned directly to Betty
+  (`Runs on: Hardware (bare metal)`) even though it is a Docker container;
+  `homelab-hub-scanner` also appeared as a direct child in the map.
+  **Do not assume these parent assignments have already been corrected.**
+  The owner favours simply renaming the runtime display names to
+  **`Unraid Docker`** and **`Proxmox Docker`** in the inventory rather than
+  adding dropdown-label code. Renaming and reparenting are separate, user-reviewed
+  inventory edits; neither is an instruction to perform them automatically.
+- Current development branch head at this handover: `9f9a5a63a920f16a07c3439ef54b69e6b1abc2d3`.
+  Check the **actual** remote branch head and local worktree before editing;
+  the branch may have advanced. The immediately prior sidebar Tools commit was
+  `2914953623d22381b7e80e967718094f838b57c3`. Historical commit IDs
+  are context, not a request to reset or check out an old version.
+- Work style: concise, actionable explanations; for supervised terminal tasks,
+  offer one safe, verifiable step at a time. Do not contradict previous commands,
+  guess which duplicate parent was selected or unnecessarily ask for information
+  already supplied. Never expose tokens or secrets in commands/log output.
+- **ChatGPT Work handover:** start by reading this file, the handover document
+  and relevant current code; inspect branch status, then confirm the owner's
+  **next requested task**. Do not launch a deployment, scan, inventory edit
+  or other live action simply because this handover exists.
+
 ## Autonomous development loop
 1. Inspect branch, status, relevant code and existing integrations. Preserve local
    work; do not discard changes or create extra worktrees without a clear owner request.
