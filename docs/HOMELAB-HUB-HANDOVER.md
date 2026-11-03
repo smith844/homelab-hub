@@ -60,7 +60,7 @@ observations with inventory and offers reviewed container changes.
 | UniFi enrichment | `services/unifi.py` (official read-only Integration API + cache), `docs/unifi-integration.md` |
 | Network scanner service | `scanner/hlh_scanner/` (target validation, Nmap XML, jobs, HTTP API) |
 | Input/identity adapters | `services/discovery_adapters.py`, `discovery_identity.py`, `network_reconciliation.py` |
-| SPA/navigation | `frontend/src/App.svelte`, `components/Sidebar.svelte` |
+| SPA/navigation | `frontend/src/App.svelte`, `components/Sidebar.svelte`, `lib/sidebarTools.js` |
 | Management pages | `frontend/src/pages/GroupsPage.svelte`, `ReconciliationPage.svelte` |
 | Maps | `pages/MapPage.svelte`, `components/map/NetworkMap.svelte`, `TreeView.svelte`, `TreeNode.svelte` |
 | Map logic/icons/theme | `frontend/src/lib/grouping.js`, `mapViews.js`, `groupIcons.js`, `frontend/src/theme.css` |
@@ -171,9 +171,15 @@ expansion, Graph/Tree controls, and exact SVG fixtures at 75%, 100% and 200% zoo
 
 Browser-local keys include `hlh.mapViews`, `hlh.mapCurrent`,
 `hlh.mapLayout.<signature>`, `hlh.mapLayoutGrouped.<signature>`,
-`hlh.mapGroupAnchors.<signature>`, `hlh.mapGroupExpanded`, `hlh.theme` and
-`hlh.siteName`. `hlh.adminToken` is **sessionStorage only**. Do not clear or change
-these keys casually; inventory export does not back up browser layouts.
+`hlh.mapGroupAnchors.<signature>`, `hlh.mapGroupExpanded`, `hlh.sidebarToolsOpen`,
+`hlh.theme` and `hlh.siteName`. `hlh.adminToken` is **sessionStorage only**. Do not
+clear or change these keys casually; inventory export does not back up browser layouts.
+
+The sidebar keeps Network discovery and Reconciliation in a separated, collapsible
+**Tools** group. Its expanded/collapsed preference is remembered in
+`hlh.sidebarToolsOpen`; a Tools page always expands it on activation, without
+overwriting the saved preference. All other navigation groups and the running-scan
+indicator remain outside the Tools group.
 
 ## Phase 4: delivered slice and verified Betty findings
 
@@ -414,10 +420,12 @@ handover): **106 backend tests, 50 frontend tests, 10 Chromium checks**, product
 frontend build and isolated local API/SPA smoke checks passed. The Docker exporter
 change was validated with **120 backend tests** (14 exporter tests, including real
 `normalise_snapshot` compatibility). Bulk/exclusions added **137 backend tests**, and
-the Phase 5 network-discovery slice, including persistent scan tracking, brings the
-totals to **196 backend tests, 22 scanner tests and 66 frontend unit tests**; the
-production frontend build and all **7 Network discovery/persistence Playwright
-checks** passed. A full browser run passed **16 of 18** checks: the two remaining
+the Phase 5 network-discovery slice, including persistent scan tracking and the
+collapsible sidebar Tools group, brings the totals to **196 backend tests, 22 scanner
+tests and 71 frontend unit tests**; the production frontend build and all **9 Network
+discovery/persistence/sidebar Playwright checks** passed. A focused browser run of
+all 12 Network discovery, Reconciliation and sidebar checks also passed. The last
+full browser run (before this sidebar slice) passed **16 of 18** checks: the two
 FolderView SVG snapshot checks have no `-win32` baselines in this checkout, so they
 cannot be compared on this Windows host and are unrelated to discovery. Backend
 validation used Python 3.12; production Dockerfile uses Python 3.14. Existing

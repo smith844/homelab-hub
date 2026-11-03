@@ -281,7 +281,9 @@ changes Docker reconciliation.
   metadata is cached and the page refetches details from the scanner.
 - While a scan is active, duplicate submissions are disabled and a compact
   “Scan running” link with the target appears in the sidebar. The link is driven by
-  the same session state and does not add another poller.
+  the same session state and does not add another poller. Network discovery and
+  Reconciliation live under the collapsible **Tools** navigation group, which
+  auto-expands while either page is active.
 - An expired job (`404`) clears the saved running state and shows an explicit notice;
   it is not restarted. A temporary scanner outage keeps the saved scan and offers a
   manual retry, so an unreachable scanner is never treated as a completed or expired
