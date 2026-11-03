@@ -47,6 +47,9 @@ host 192.168.1.80:8790 ──► homelab-hub-redesign (web test)
 - An explicitly approved private scanner range has been verified. **Do not derive
   subnets from VLAN numbers.** For example, VLAN 10 being "Guest" does not mean
   `192.168.10.0/24`; verify the actual subnet.
+- Optional read-only UniFi configuration uses the same private web env file; see
+  [unifi-integration.md](unifi-integration.md). It is independent of scanner
+  deployment and never changes scanner privileges or ranges.
 
 ## 1. Create the shared scanner env without printing the token
 

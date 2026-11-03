@@ -195,9 +195,15 @@ Web bridge:
 - `POST /api/network-discovery/scan` — admin token required; validates target,
   starts the scanner, returns `202 {scan}`.
 - `GET /api/network-discovery/scan/<uuid>` — read-only status proxy.
-- `POST /api/network-discovery/reconcile` — read-only, network-wide matching of a
-  scan status against the full inventory. No admin token is needed because it only
-  reads inventory and cannot write.
+- `POST /api/network-discovery/reconcile` — admin-token required; read-only,
+  network-wide matching of a scan status against the full inventory plus any cached
+  UniFi observations. It never starts a scan or writes inventory.
+- `GET /api/network-discovery/unifi/status` — optional UniFi cache status/counts.
+- `POST /api/network-discovery/unifi/refresh` — admin-token required; explicit
+  read-only UniFi refresh. It does not start Nmap.
+
+UniFi configuration, API authentication, TLS/CA handling, normalized evidence and
+cache semantics are documented in [unifi-integration.md](unifi-integration.md).
 
 ## Network-wide inventory matching
 
@@ -214,6 +220,8 @@ identity evidence across the whole inventory:
 - Network subnets: context only; a network record is never treated as a device.
 - Storage pools and shares are not treated as devices; they have no reliable host
   identity in the current schema.
+- Optional cached UniFi infrastructure/client observations, used only as separate
+  source evidence (see [unifi-integration.md](unifi-integration.md)).
 
 Evidence rules:
 
@@ -227,6 +235,9 @@ Evidence rules:
   evidence; it is not promoted to a physical host.
 - Partial/failed scans mark all observations **unverified**. Missing observations
   never imply that inventory devices were removed.
+- Current UniFi MAC/IP/name evidence can enrich a host; offline/historical UniFi
+  records never override current Nmap evidence. Nmap/UniFi conflicts become
+  ambiguous, and UniFi-only known devices are listed separately from Nmap hosts.
 - Service rows are separate from host rows. An explicit application IP+port is
   matched; an inherited parent IP+port or hostname-only service is plausible; multiple
   applications at the same IP+port are ambiguous.
@@ -297,6 +308,7 @@ unchanged.
 python -m pytest -q scanner/tests
 python -m pytest -q backend/tests/test_network_discovery.py
 python -m pytest -q backend/tests/test_network_wide_reconciliation.py
+python -m pytest -q backend/tests/test_unifi.py
 cd frontend && npm test
 ```
 

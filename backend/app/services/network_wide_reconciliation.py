@@ -97,11 +97,17 @@ def _hostname_values(value):
     return names
 
 
-def _name_alias(name):
-    text = _text(name, 200)
-    if text and " " not in text and len(text) <= 253:
-        return _normalise_hostname(text)
-    return None
+def _normalise_name(value):
+    text = _text(value, 300).strip().rstrip(".").casefold()
+    if not text or len(text) > 253:
+        return None
+    return re.sub(r"\s+", " ", text)
+
+
+def _add_name_alias(record, name):
+    key = _normalise_name(name)
+    if key:
+        record["hostnames"].setdefault(key, "inventory name")
 
 
 def _related_devices(records):
@@ -190,7 +196,7 @@ def build_inventory_index():
         if mac:
             row["macs"].add(mac)
         _add_hostname(row, host.hostname, "hostname")
-        _add_hostname(row, _name_alias(host.name), "inventory name")
+        _add_name_alias(row, host.name)
         records[("hardware", host.id)] = row
 
     for vm in vms:
@@ -204,14 +210,14 @@ def build_inventory_index():
         if mac:
             row["macs"].add(mac)
         _add_hostname(row, vm.hostname, "hostname")
-        _add_hostname(row, _name_alias(vm.name), "inventory name")
+        _add_name_alias(row, vm.name)
         records[("vms", vm.id)] = row
 
     for item in misc:
         row = _record("device", "misc", item, CATEGORY_LABELS["misc"])
         _add_ip(row, item.ip_address, "IP address")
         _add_hostname(row, item.hostname, "hostname")
-        _add_hostname(row, _name_alias(item.name), "inventory name")
+        _add_name_alias(row, item.name)
         records[("misc", item.id)] = row
 
     for app in apps:
@@ -438,7 +444,8 @@ def _device_summary(record, evidence):
 def _classify_host(observation, index, uncertain):
     ip = observation["ip"]
     mac = observation["mac"]
-    hostnames = _hostname_values(observation["hostname"])
+    hostnames = set(_hostname_values(observation["hostname"]))
+    hostnames.update(observation.get("_unifi_names") or [])
     ip_devices = [row for row in index["devices"] if ip in row["ips"]]
     mac_devices = [row for row in index["devices"] if mac and mac in row["macs"]]
     hostname_devices = [
@@ -601,7 +608,271 @@ def _classify_service(observation, index, uncertain):
     }
 
 
-def reconcile_observations(observations, inventory_index=None):
+def normalise_unifi_observations(rows):
+    """Normalize cached UniFi observations without trusting extra controller fields."""
+    if not isinstance(rows, list):
+        return []
+    result = []
+    for row in rows[:MAX_OBSERVATIONS]:
+        if not isinstance(row, dict):
+            continue
+        kind = row.get("kind")
+        if kind not in ("device", "client"):
+            continue
+        mac = row.get("mac")
+        mac = mac.casefold() if isinstance(mac, str) and _mac(mac) else ""
+        ip = _ip(row.get("ip"))
+        ips = []
+        for value in [row.get("ip")] + (row.get("ips")[:16] if isinstance(row.get("ips"), list) else []):
+            parsed = _ip(value)
+            if parsed and parsed not in ips:
+                ips.append(parsed)
+        if not ip and ips:
+            ip = ips[0]
+        name = _text(row.get("name"), 200)
+        hostname = _text(row.get("hostname"), 300)
+        if not name and not hostname and not ip and not mac:
+            continue
+        network = row.get("network") if isinstance(row.get("network"), dict) else None
+        cleaned_network = None
+        if network:
+            vlan = network.get("vlan_id")
+            try:
+                vlan = int(vlan) if vlan is not None else None
+            except (TypeError, ValueError):
+                vlan = None
+            cleaned_network = {"name": _text(network.get("name"), 120) or None, "vlan_id": vlan}
+        online = row.get("online") if isinstance(row.get("online"), bool) else None
+        result.append({
+            "source": "unifi",
+            "observed_at": _text(row.get("observed_at"), 64) or None,
+            "kind": kind,
+            "id": _text(row.get("id"), 128) or mac or name,
+            "name": name,
+            "hostname": hostname,
+            "mac": mac or None,
+            "ip": ip,
+            "ips": ips,
+            "model": _text(row.get("model"), 120),
+            "vendor": _text(row.get("vendor"), 120),
+            "device_type": _text(row.get("device_type"), 64),
+            "state": _text(row.get("state"), 32) or None,
+            "online": online,
+            "connected_at": _text(row.get("connected_at"), 64) or None,
+            "last_seen": _text(row.get("last_seen"), 64) or None,
+            "uplink_device_id": _text(row.get("uplink_device_id"), 128) or None,
+            "network": cleaned_network,
+        })
+    return result
+
+
+def _unifi_names(row):
+    names = set(_hostname_values(row.get("hostname")))
+    friendly = _normalise_name(row.get("name"))
+    if friendly:
+        names.add(friendly)
+    return names
+
+
+def _unifi_index(rows):
+    by_mac, by_ip, by_name = {}, {}, {}
+    for row in rows:
+        if row.get("mac"):
+            by_mac.setdefault(row["mac"], []).append(row)
+        for ip in row.get("ips") or ([row["ip"]] if row.get("ip") else []):
+            by_ip.setdefault(ip, []).append(row)
+        for name in _unifi_names(row):
+            by_name.setdefault(name, []).append(row)
+    return {"by_mac": by_mac, "by_ip": by_ip, "by_name": by_name}
+
+
+def _matching_unifi(observation, unifi_index):
+    matches = OrderedDict()
+    mac = observation.get("mac")
+    ip = observation.get("ip")
+    names = _hostname_values(observation.get("hostname"))
+    for row in unifi_index["by_mac"].get(mac, []) if mac else []:
+        matches[(row["kind"], row["id"])] = row
+    for row in unifi_index["by_ip"].get(ip, []) if ip else []:
+        matches[(row["kind"], row["id"])] = row
+    for name in names:
+        for row in unifi_index["by_name"].get(name, []):
+            matches[(row["kind"], row["id"])] = row
+    return list(matches.values())
+
+
+def _unifi_record_evidence(record, row):
+    evidence = []
+    if row.get("mac") and row["mac"] in record["macs"]:
+        evidence.append("UniFi MAC")
+    if any(ip in record["ips"] for ip in (row.get("ips") or [row.get("ip")]) if ip):
+        evidence.append("UniFi IP")
+    if _unifi_names(row).intersection(record["hostnames"]):
+        evidence.append("UniFi name")
+    return evidence
+
+
+def _append_candidate(candidates, record, evidence):
+    key = (record["type"], record["id"])
+    existing = next((item for item in candidates
+                     if (item["type"], item["id"]) == key), None)
+    if existing:
+        existing["evidence"] = list(dict.fromkeys(existing["evidence"] + evidence))
+    else:
+        candidates.append(_candidate(record, evidence))
+
+
+def _public_unifi(row):
+    return {
+        "source": "unifi",
+        "kind": row["kind"],
+        "name": row["name"],
+        "hostname": row["hostname"],
+        "mac": row["mac"],
+        "ip": row["ip"],
+        "ips": row.get("ips") or ([row["ip"]] if row["ip"] else []),
+        "device_type": row["device_type"],
+        "online": row["online"],
+        "state": row["state"],
+        "last_seen": row["last_seen"],
+        "connected_at": row["connected_at"],
+        "network": row.get("network"),
+        "vendor": row["vendor"],
+        "model": row["model"],
+        "uplink_device_id": row["uplink_device_id"],
+    }
+
+
+def _apply_unifi(row, matches, index):
+    """Attach UniFi evidence without letting stale records override Nmap."""
+    if not matches:
+        row["sources"] = ["nmap"]
+        row.setdefault("unifi_matches", [])
+        row.setdefault("unifi_evidence", [])
+        row.setdefault("source_conflict", False)
+        return row
+
+    row["sources"] = ["nmap", "unifi"]
+    row["unifi_matches"] = [_public_unifi(item) for item in matches]
+    current = [item for item in matches if item.get("online") is True]
+    historical = [item for item in matches if item.get("online") is not True]
+    evidence = []
+    hits = {}
+    for item in current:
+        item_hits = []
+        for record in index["devices"]:
+            hit_evidence = _unifi_record_evidence(record, item)
+            if hit_evidence:
+                item_hits.append((record, hit_evidence))
+        mac_hits = [pair for pair in item_hits if "UniFi MAC" in pair[1]]
+        if mac_hits:
+            item_hits = mac_hits
+        for record, hit_evidence in item_hits:
+            key = (record["type"], record["id"])
+            hits.setdefault(key, {"record": record, "evidence": []})
+            hits[key]["evidence"] = list(dict.fromkeys(hits[key]["evidence"] + hit_evidence))
+            evidence.extend(hit_evidence)
+
+    existing_ids = {(candidate["type"], candidate["id"])
+                    for candidate in row.get("candidates", [])
+                    if candidate["type"] in DEVICE_TYPES}
+    for item in hits.values():
+        _append_candidate(row.setdefault("candidates", []), item["record"], item["evidence"])
+    hit_ids = set(hits)
+
+    if hit_ids:
+        if len(hit_ids) == 1:
+            record = next(iter(hits.values()))["record"]
+            item_evidence = next(iter(hits.values()))["evidence"]
+            if not existing_ids:
+                row["classification"] = "matched" if "UniFi MAC" in item_evidence else "plausible"
+                row["reason"] = (
+                    "UniFi current evidence identifies this inventory device; "
+                    "it was not matched by the Nmap inventory lookup alone."
+                )
+            elif hit_ids.issubset(existing_ids):
+                row["evidence"] = list(dict.fromkeys(row.get("evidence", []) + item_evidence))
+        else:
+            row["classification"] = "ambiguous"
+            row["source_conflict"] = True
+            row["reason"] = (
+                "UniFi current evidence matches multiple inventory devices; "
+                "review before deciding."
+            )
+    if existing_ids and hit_ids and not existing_ids.intersection(hit_ids):
+        row["classification"] = "ambiguous"
+        row["source_conflict"] = True
+        row["reason"] = "Nmap and UniFi evidence identify different inventory devices; review."
+
+    # A Nmap MAC and a UniFi MAC that disagree are an explicit source conflict.
+    nmap_mac = row.get("mac")
+    unifi_macs = {item["mac"] for item in current if item.get("mac")}
+    if nmap_mac and unifi_macs and nmap_mac not in unifi_macs:
+        row["source_conflict"] = True
+        evidence.append("UniFi MAC differs from Nmap MAC")
+        if row["classification"] == "matched":
+            row["classification"] = "ambiguous"
+            row["reason"] = "Nmap and UniFi MAC evidence disagree; review before deciding."
+
+    for item in historical:
+        evidence.append("UniFi historical record (not current)")
+    for item in matches:
+        evidence.append("UniFi " + item["kind"])
+        if item.get("name"):
+            evidence.append("UniFi friendly name")
+        if item.get("network"):
+            evidence.append("UniFi network")
+    row["unifi_evidence"] = list(dict.fromkeys(evidence))
+    row["evidence"] = list(dict.fromkeys(row.get("evidence", []) + evidence))
+    row.setdefault("source_conflict", False)
+    return row
+
+
+def _classify_unifi_only(row, index):
+    observation = {
+        "ip": row.get("ip"),
+        "hostname": row.get("hostname") or "",
+        "mac": row.get("mac") or "",
+        "_unifi_names": list(_unifi_names(row)),
+        "open_ports": 0,
+    }
+    result = _classify_host(observation, index, False)
+    result.pop("_unifi_names", None)
+    result.update({
+        "source": "unifi",
+        "sources": ["unifi"],
+        "unifi_only": True,
+        "unifi_matches": [_public_unifi(row)],
+        "online": row.get("online"),
+        "state": row.get("state"),
+        "last_seen": row.get("last_seen"),
+        "connected_at": row.get("connected_at"),
+        "device_type": row.get("device_type"),
+        "network": row.get("network") or result.get("network"),
+        "reason": (
+            "UniFi-only known device; it was not observed in the current Nmap scan. "
+            + ("UniFi reports it offline/historical. " if row.get("online") is False else "")
+            + result["reason"]
+        ),
+    })
+    unifi_evidence = []
+    for record in index["devices"]:
+        evidence = _unifi_record_evidence(record, row)
+        if evidence:
+            _append_candidate(result.setdefault("candidates", []), record, evidence)
+            unifi_evidence.extend(evidence)
+    if unifi_evidence:
+        result["evidence"] = list(dict.fromkeys(result.get("evidence", []) + unifi_evidence))
+    result["unifi_evidence"] = list(dict.fromkeys(unifi_evidence + [
+        "UniFi " + row["kind"], "UniFi friendly name" if row.get("name") else "",
+        "UniFi offline" if row.get("online") is False else "UniFi online",
+    ]))
+    result["unifi_evidence"] = [item for item in result["unifi_evidence"] if item]
+    return result
+
+
+def reconcile_observations(observations, inventory_index=None, unifi_observations=None,
+                            unifi_status=None):
     """Match normalized host/service observations against the full inventory.
 
     Future evidence sources (for example UniFi client/DHCP data) can produce the
@@ -611,16 +882,63 @@ def reconcile_observations(observations, inventory_index=None):
     if not isinstance(observations, dict):
         raise NetworkWideError("Normalized observations are required")
     index = inventory_index or build_inventory_index()
-    hosts = [_classify_host(row, index, observations.get("uncertain", False))
-             for row in observations.get("hosts", [])]
-    services = [_classify_service(row, index, observations.get("uncertain", False))
-                for row in observations.get("services", [])]
+    unifi_rows = normalise_unifi_observations(unifi_observations or [])
+    unifi_by = _unifi_index(unifi_rows)
+    used_unifi = set()
+    hosts = []
+    for row in observations.get("hosts", []):
+        matches = _matching_unifi(row, unifi_by)
+        prepared = dict(row)
+        current_macs = {item["mac"] for item in matches
+                        if item.get("online") is True and item.get("mac")}
+        supplied_unifi_mac = False
+        if not prepared.get("mac") and len(current_macs) == 1:
+            prepared["mac"] = next(iter(current_macs))
+            supplied_unifi_mac = True
+        prepared["_unifi_names"] = sorted({
+            name for item in matches for name in _unifi_names(item)})
+        result = _classify_host(prepared, index, observations.get("uncertain", False))
+        result.pop("_unifi_names", None)
+        result = _apply_unifi(result, matches, index)
+        if supplied_unifi_mac and result["classification"] == "ambiguous":
+            result["source_conflict"] = True
+            result["reason"] = "Nmap IP and UniFi MAC evidence identify different inventory devices; review."
+        used_unifi.update((item["kind"], item["id"]) for item in matches)
+        hosts.append(result)
+    services = []
+    for row in observations.get("services", []):
+        result = _classify_service(row, index, observations.get("uncertain", False))
+        result["sources"] = ["nmap"]
+        services.append(result)
+
+    unifi_only = []
+    for row in unifi_rows:
+        if (row["kind"], row["id"]) in used_unifi:
+            continue
+        unifi_only.append(_classify_unifi_only(row, index))
+
+    devices = [row for row in unifi_rows if row["kind"] == "device"]
+    clients = [row for row in unifi_rows if row["kind"] == "client"]
+    status = dict(unifi_status or {})
+    status.update({
+        "configured": bool(status.get("configured", bool(unifi_rows))),
+        "has_data": bool(status.get("has_data", bool(unifi_rows))),
+        "infrastructure_devices": len(devices),
+        "clients": len(clients),
+        "online_devices": sum(row.get("online") is True for row in devices),
+        "offline_devices": sum(row.get("online") is False for row in devices),
+        "current_clients": sum(row.get("online") is True for row in clients),
+        "historical_clients": sum(row.get("online") is False for row in clients),
+        "unifi_only": len(unifi_only),
+    })
+
     host_counts = {key: sum(row["classification"] == key for row in hosts)
                    for key in ("matched", "plausible", "shared", "ambiguous", "unmatched", "unverified")}
     service_counts = {key: sum(row["classification"] == key for row in services)
                       for key in ("matched", "plausible", "ambiguous", "unmatched", "unverified")}
     return {
         "source": observations.get("source", "nmap"),
+        "sources": ["nmap"] + (["unifi"] if unifi_rows else []),
         "scan": {
             "type": observations.get("type"),
             "status": observations.get("status"),
@@ -631,6 +949,8 @@ def reconcile_observations(observations, inventory_index=None):
         },
         "hosts": hosts,
         "services": services,
+        "unifi_only": unifi_only,
+        "unifi": status,
         "summary": {
             "hosts_discovered": len(hosts),
             **{f"hosts_{key}": value for key, value in host_counts.items()},
@@ -638,15 +958,28 @@ def reconcile_observations(observations, inventory_index=None):
             **{f"services_{key}": value for key, value in service_counts.items()},
             "inventory_devices": len(index["devices"]),
             "inventory_services": len(index["services"]),
+            "unifi_infrastructure_devices": len(devices),
+            "unifi_clients": len(clients),
+            "unifi_current_clients": status["current_clients"],
+            "unifi_historical_clients": status["historical_clients"],
+            "unifi_only": len(unifi_only),
+            "nmap_hosts_with_unifi": sum("unifi" in row.get("sources", []) for row in hosts),
+            "unifi_source_conflicts": sum(bool(row.get("source_conflict")) for row in hosts),
         },
         "reason": (
             "Read-only network-wide comparison across hardware, VMs, other devices, "
-            "application endpoints and network memberships. A missing observation never "
-            "proves that an inventory device was removed."
+            "application endpoints and network memberships. Nmap observations are current "
+            "scan evidence; UniFi records are separate client/device evidence and offline "
+            "or missing records are never treated as Nmap absence. A missing observation "
+            "never proves that an inventory device was removed."
         ),
     }
 
 
-def compare_network_wide(scan):
+def compare_network_wide(scan, unifi_observations=None, unifi_status=None):
     """Return a read-only, network-wide comparison for a scanner status object."""
-    return reconcile_observations(normalise_scan_observations(scan))
+    return reconcile_observations(
+        normalise_scan_observations(scan),
+        unifi_observations=unifi_observations,
+        unifi_status=unifi_status,
+    )

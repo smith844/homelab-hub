@@ -148,9 +148,11 @@ the detailed sections.
 
 Snapshots are page-local; there is no persisted scan history, automatic refresh,
 network-resource mutation or trusted live transport yet. The separate scanner now
-provides authenticated start/status transport and read-only comparison; next work is
-persisted scan history/freshness, reviewed inventory/map actions, optional verified-
-TLS HTTP probing and supervised deployment/scheduling. This also determines how
-Betty and Blackbox produce authoritative container data; network probing alone
-cannot supply it. No deployment or live collection is authorized by these
-instructions.
+provides authenticated start/status transport and read-only comparison; optional
+read-only UniFi evidence enriches the same network-wide matcher without changing
+scanner privileges or approved ranges (see
+[unifi-integration.md](unifi-integration.md)). Next work is persisted scan
+history/freshness, reviewed inventory/map actions, optional verified-TLS HTTP
+probing and supervised deployment/scheduling. This also determines how Betty and
+Blackbox produce authoritative container data; network probing alone cannot supply
+it. No deployment or live collection is authorized by these instructions.

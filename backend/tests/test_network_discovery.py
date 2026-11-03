@@ -195,3 +195,65 @@ def test_missing_scanner_configuration_disables_start(inventory, client, app):
         "target": "192.168.1.20", "scan_type": "discover"})
     assert response.status_code == 503
     assert "not configured" in response.get_json()["error"]
+
+
+def test_reconcile_requires_admin_and_unifi_status_is_read_only(inventory, client, app):
+    assert client.post("/api/network-discovery/reconcile", json={"scan": scan_payload()}).status_code == 401
+    app.config["ADMIN_TOKEN"] = ""
+    assert client.post("/api/network-discovery/reconcile", json={"scan": scan_payload()},
+                       headers=HEADERS).status_code == 503
+    app.config["ADMIN_TOKEN"] = "network-test-token"
+    assert client.get("/api/network-discovery/unifi/status").status_code == 200
+    assert client.post("/api/network-discovery/unifi/refresh", headers={}).status_code == 401
+
+
+def test_unifi_refresh_requires_admin_and_never_leaks_credentials(inventory, client, app, monkeypatch):
+    from app.routes import network_discovery as routes
+
+    app.config.update(UNIFI_URL="https://unifi.test", UNIFI_API_KEY="never-return-this-key")
+    status_response = client.get("/api/network-discovery/unifi/status")
+    assert status_response.status_code == 200
+    assert "never-return-this-key" not in status_response.get_data(as_text=True)
+
+    def success():
+        return {"configured": True, "has_data": True, "last_success": "2026-11-03T10:00:00Z",
+                "clients": 2, "infrastructure_devices": 1, "current_clients": 2,
+                "historical_clients": 0, "stale": False, "error": None}
+
+    monkeypatch.setattr(routes.unifi_store, "refresh", success)
+    response = client.post("/api/network-discovery/unifi/refresh", headers=HEADERS)
+    assert response.status_code == 200
+    assert response.get_json()["unifi"]["clients"] == 2
+    assert "never-return-this-key" not in response.get_data(as_text=True)
+
+    def auth_failure():
+        raise routes.UnifiAuthError("UniFi rejected the configured API key")
+
+    monkeypatch.setattr(routes.unifi_store, "refresh", auth_failure)
+    response = client.post("/api/network-discovery/unifi/refresh", headers=HEADERS)
+    assert response.status_code == 502
+    assert "never-return-this-key" not in response.get_data(as_text=True)
+    assert response.get_json()["error"]
+
+
+def test_reconcile_includes_cached_unifi_observations(inventory, client, monkeypatch):
+    from app.routes import network_discovery as routes
+
+    monkeypatch.setattr(routes.unifi_store, "observations", lambda: [{
+        "source": "unifi", "kind": "client", "id": "c1", "name": "Phone",
+        "hostname": "", "mac": "AA:BB:CC:DD:EE:77", "ip": "192.168.1.77",
+        "online": True, "last_seen": None, "network": None, "device_type": "wireless",
+        "state": "ONLINE", "connected_at": None,
+    }])
+    monkeypatch.setattr(routes.unifi_store, "status", lambda: {
+        "configured": True, "has_data": True, "last_success": "2026-11-03T10:00:00Z",
+        "stale": False, "error": None, "clients": 1, "infrastructure_devices": 0,
+        "current_clients": 1, "historical_clients": 0,
+    })
+    response = client.post("/api/network-discovery/reconcile", headers=HEADERS,
+                           json={"scan": scan_payload()})
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["unifi"]["configured"] is True
+    assert body["summary"]["unifi_clients"] == 1
+    assert body["summary"]["unifi_only"] == 1

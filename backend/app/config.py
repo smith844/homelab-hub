@@ -22,3 +22,14 @@ class Config:
     SCANNER_DEFAULT_PORTS = (os.environ.get("HLH_SCANNER_DEFAULT_PORTS") or "22,80,443,445,3389,8080,8443").strip()
     SCANNER_MAX_HOSTS = (os.environ.get("HLH_SCANNER_MAX_HOSTS") or "1024").strip()
     SCANNER_MAX_PORTS = (os.environ.get("HLH_SCANNER_MAX_PORTS") or "256").strip()
+    # Optional read-only UniFi Network Integration API. The API key is never
+    # returned to the browser. Only HTTPS is accepted; use a CA file for a
+    # private controller certificate rather than disabling TLS verification.
+    UNIFI_URL = (os.environ.get("HLH_UNIFI_URL") or "").strip()
+    UNIFI_API_KEY = (os.environ.get("HLH_UNIFI_API_KEY") or "").strip()
+    UNIFI_SITE = (os.environ.get("HLH_UNIFI_SITE") or "").strip()
+    UNIFI_CA_FILE = (os.environ.get("HLH_UNIFI_CA_FILE") or "").strip() or None
+    UNIFI_TIMEOUT = (os.environ.get("HLH_UNIFI_TIMEOUT") or "10").strip()
+    UNIFI_MAX_PAGES = (os.environ.get("HLH_UNIFI_MAX_PAGES") or "20").strip()
+    UNIFI_MAX_OBSERVATIONS = (os.environ.get("HLH_UNIFI_MAX_OBSERVATIONS") or "5000").strip()
+    UNIFI_STALE_SECONDS = (os.environ.get("HLH_UNIFI_STALE_SECONDS") or "3600").strip()

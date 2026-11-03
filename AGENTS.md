@@ -42,6 +42,8 @@ plugins, published environment, fixed workspace path or particular model is requ
   Runtime container/image IDs are observations, not permanent identity. Network-wide
   discovery matching is read-only and independent of host-scoped Docker matching.
   It must not create, update, merge or delete inventory or change map layouts.
+  UniFi integration is read-only, GET-only, API-key/TLS-verified, and never treats
+  offline/historical clients as current Nmap hosts or writes to the controller.
 - Preserve `hlh-discovery:v1` notes metadata when editing/extending importers. Comparison
   is read-only by default; reviewed apply needs admin authentication. Never auto-delete
   inventory or interpret failed/partial/missing scans as proof of absence.

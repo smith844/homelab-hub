@@ -5,6 +5,7 @@ from app.models import AppService, Hardware, Misc, Network, NetworkMember, VM, d
 from app.services.network_wide_reconciliation import (
     NetworkWideError,
     compare_network_wide,
+    reconcile_observations,
 )
 
 
@@ -40,6 +41,7 @@ def inventory(app):
         AppService(name="NAS UI", ip_address="192.168.1.70", port=443),
     ])
     db.session.commit()
+    app.config["ADMIN_TOKEN"] = "network-test-token"
     return {"betty": betty, "blackbox": blackbox, "pihole": pihole, "backup": backup,
             "vip_a": vip_a, "vip_b": vip_b, "camera": camera, "docker": docker,
             "lan": lan}
@@ -239,12 +241,163 @@ def test_scan_validation_rejects_malformed_input_and_bad_ports(app):
 
 def test_api_returns_network_wide_result_without_inventory_mutation(inventory, client):
     before = [(row.id, row.name, row.ip_address) for row in Hardware.query.order_by(Hardware.id)]
-    response = client.post("/api/network-discovery/reconcile", json={"scan": scan(hosts=[
-        host("192.168.1.50", "blackbox.lan"), host("192.168.1.80")])})
+    response = client.post("/api/network-discovery/reconcile", headers={"X-Admin-Token": "network-test-token"},
+                           json={"scan": scan(hosts=[
+                               host("192.168.1.50", "blackbox.lan"), host("192.168.1.80")])})
     assert response.status_code == 200, response.get_json()
     body = response.get_json()
     assert body["source"] == "nmap"
     assert body["summary"]["hosts_discovered"] == 2
     assert body["summary"]["hosts_shared"] == 1
     assert [(row.id, row.name, row.ip_address) for row in Hardware.query.order_by(Hardware.id)] == before
-    assert client.post("/api/network-discovery/reconcile", json={}).status_code == 400
+    assert client.post("/api/network-discovery/reconcile", headers={"X-Admin-Token": "network-test-token"},
+                       json={}).status_code == 400
+
+
+def unifi_client(ip="192.168.1.50", mac="AA:BB:CC:DD:EE:02", name="Blackbox client",
+                 online=True, last_seen=None, network=None, kind="client", **extra):
+    data = {
+        "source": "unifi", "kind": kind, "id": f"{kind}-{mac}", "name": name,
+        "hostname": "", "mac": mac, "ip": ip, "online": online,
+        "last_seen": last_seen, "network": network, "device_type": "wired",
+        "state": "ONLINE" if online else "OFFLINE", "observed_at": "2026-11-03T10:00:00Z",
+    }
+    data.update(extra)
+    return data
+
+
+def test_unifi_enriches_a_shared_nmap_host_without_adding_device_identities(inventory):
+    result = reconcile_observations(
+        {"type": "discover", "status": "completed", "target": "192.168.1.0/24",
+         "completed_at": "2026-11-03T10:00:00Z", "uncertain": False, "warnings": [],
+         "hosts": [host("192.168.1.80", "traefik.smitharend.com")], "services": []},
+        unifi_observations=[unifi_client(ip="192.168.1.80", mac="AA:BB:CC:DD:EE:01",
+                                         name="Betty")],
+        unifi_status={"configured": True, "has_data": True, "last_success": "2026-11-03T10:00:00Z"},
+    )
+    row = result["hosts"][0]
+    assert row["classification"] == "shared"
+    assert row["sources"] == ["nmap", "unifi"]
+    assert row["unifi_matches"][0]["name"] == "Betty"
+    assert "UniFi MAC" in row["evidence"]
+    assert result["summary"]["nmap_hosts_with_unifi"] == 1
+    assert result["summary"]["unifi_only"] == 0
+
+
+def test_unifi_current_mac_can_supply_missing_nmap_identity_evidence(inventory):
+    result = compare_network_wide(
+        scan(hosts=[host("192.168.1.99", "new-device")]),
+        unifi_observations=[unifi_client(ip="192.168.1.99", mac="AA:BB:CC:DD:EE:02",
+                                         name="Blackbox")],
+    )
+    row = result["hosts"][0]
+    assert row["classification"] == "matched"
+    assert row["candidates"][0]["name"] == "Blackbox"
+    assert "UniFi MAC" in row["evidence"]
+
+
+def test_unifi_only_client_is_separate_from_nmap_hosts(inventory):
+    result = compare_network_wide(
+        scan(hosts=[host("192.168.1.16", "pi.hole")]),
+        unifi_observations=[unifi_client(ip="192.168.1.77", mac="AA:BB:CC:DD:EE:77",
+                                         name="Unseen phone")],
+    )
+    assert [row["ip"] for row in result["hosts"]] == ["192.168.1.16"]
+    assert len(result["unifi_only"]) == 1
+    assert result["unifi_only"][0]["source"] == "unifi"
+    assert result["unifi_only"][0]["unifi_only"] is True
+    assert result["summary"]["unifi_only"] == 1
+    assert result["summary"]["unifi_clients"] == 1
+
+
+def test_offline_unifi_client_is_historical_and_never_a_current_host(inventory):
+    result = compare_network_wide(
+        scan(hosts=[]),
+        unifi_observations=[unifi_client(ip="192.168.1.88", mac="AA:BB:CC:DD:EE:88",
+                                         name="Old phone", online=False,
+                                         last_seen="2026-11-01T00:00:00Z")],
+    )
+    assert result["hosts"] == []
+    assert result["unifi_only"][0]["online"] is False
+    assert "UniFi reports it offline/historical" in result["unifi_only"][0]["reason"]
+    assert result["summary"]["unifi_current_clients"] == 0
+    assert result["summary"]["unifi_historical_clients"] == 1
+
+
+def test_unifi_ip_conflict_with_nmap_is_ambiguous_and_explained(inventory):
+    result = compare_network_wide(
+        scan(hosts=[host("192.168.1.16", "pi.hole")]),
+        unifi_observations=[unifi_client(ip="192.168.1.16", mac="AA:BB:CC:DD:EE:02",
+                                         name="Blackbox stale client")],
+    )
+    row = result["hosts"][0]
+    assert row["classification"] == "ambiguous"
+    assert row["source_conflict"] is True
+    assert {candidate["name"] for candidate in row["candidates"]} == {
+        "PiHole Main", "Blackbox"}
+    assert "Nmap IP and UniFi MAC evidence identify different" in row["reason"]
+
+
+def test_unifi_offline_identity_does_not_override_nmap_match(inventory):
+    result = compare_network_wide(
+        scan(hosts=[host("192.168.1.16", "pi.hole")]),
+        unifi_observations=[unifi_client(ip="192.168.1.16", mac="AA:BB:CC:DD:EE:02",
+                                         name="Blackbox historical", online=False)],
+    )
+    row = result["hosts"][0]
+    assert row["classification"] == "matched"
+    assert row["candidates"][0]["name"] == "PiHole Main"
+    assert "UniFi historical record (not current)" in row["evidence"]
+
+
+def test_unifi_status_and_network_metadata_are_exposed_without_secrets(inventory):
+    result = compare_network_wide(
+        scan(hosts=[]),
+        unifi_observations=[unifi_client(ip="192.168.1.90", network={"name": "IoT", "vlan_id": 20},
+                                         name="IoT device")],
+        unifi_status={"configured": True, "has_data": True, "last_success": "2026-11-03T10:00:00Z",
+                      "stale": False, "error": None},
+    )
+    assert result["unifi"]["configured"] is True
+    assert result["unifi"]["clients"] == 1
+    assert result["unifi_only"][0]["network"] == {"name": "IoT", "vlan_id": 20}
+    assert "api_key" not in str(result).lower()
+
+
+def test_unifi_multiple_ips_and_duplicate_macs_are_kept_as_observations(inventory):
+    result = compare_network_wide(
+        scan(hosts=[host("192.168.1.99", "multi-interface")]),
+        unifi_observations=[
+            unifi_client(ip="192.168.1.99", mac="AA:BB:CC:DD:EE:02",
+                         name="Blackbox", ips=["192.168.1.99", "192.168.1.98"]),
+            unifi_client(ip="192.168.1.77", mac="AA:BB:CC:DD:EE:02",
+                         name="Old duplicate MAC", id="client-old"),
+        ],
+    )
+    row = result["hosts"][0]
+    assert row["classification"] == "matched"
+    assert row["unifi_matches"][0]["ips"] == ["192.168.1.99", "192.168.1.98"]
+    assert len(result["unifi_only"]) == 1
+    assert result["unifi_only"][0]["unifi_matches"][0]["ip"] == "192.168.1.77"
+
+
+def test_unifi_network_metadata_is_context_not_identity(inventory):
+    result = compare_network_wide(
+        scan(hosts=[host("192.168.1.16", "pi.hole")]),
+        unifi_observations=[unifi_client(ip="192.168.1.16", mac="AA:BB:CC:DD:EE:03",
+                                         name="PiHole Main",
+                                         network={"name": "Guest", "vlan_id": 10})],
+    )
+    row = result["hosts"][0]
+    assert row["classification"] == "matched"
+    assert row["unifi_matches"][0]["network"] == {"name": "Guest", "vlan_id": 10}
+    assert row["network"] == {"id": 1, "name": "LAN", "vlan_id": 1}
+
+
+def test_unifi_observations_do_not_change_inventory(inventory):
+    before = (Hardware.query.count(), VM.query.count(), AppService.query.count())
+    compare_network_wide(
+        scan(hosts=[host("192.168.1.99")]),
+        unifi_observations=[unifi_client(ip="192.168.1.99", mac="AA:BB:CC:DD:EE:02")],
+    )
+    assert (Hardware.query.count(), VM.query.count(), AppService.query.count()) == before

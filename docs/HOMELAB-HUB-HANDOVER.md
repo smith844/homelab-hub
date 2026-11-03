@@ -31,11 +31,13 @@ observations with inventory and offers reviewed container changes.
 - `backend/docker-entrypoint.sh` runs `alembic upgrade head` before serving.
   `create_app()` also calls `db.create_all()`; this does not replace migrations
   when upgrading existing tables.
-- No Docker socket or infrastructure credentials are required by the web app. It
-  does not run nmap or Docker collection. A separate host-side exporter
-  (`scripts/docker-snapshot.sh`) produces uploaded container snapshots, and a
-  separate token-authenticated scanner (`scanner/`) performs approved Nmap scans.
-  Neither collector is scheduled by the web app, and neither shares a database.
+- No Docker socket is required by the web app. It does not run nmap or Docker
+  collection. A separate host-side exporter (`scripts/docker-snapshot.sh`) produces
+  uploaded container snapshots, and a separate token-authenticated scanner
+  (`scanner/`) performs approved Nmap scans. Optional read-only UniFi Network
+  Integration evidence is fetched through `services/unifi.py` with server-side
+  `X-API-KEY` authentication and an in-memory cache. Neither collector is scheduled
+  by the web app, and neither shares a database.
 - Reconciliation consumes uploaded Docker JSON and read-only network observations.
   The web app proxies scan start/status to the separate scanner; it never calls the
   upstream scanner's direct inventory-import endpoints.
@@ -55,6 +57,7 @@ observations with inventory and offers reviewed container changes.
 | Reconciliation exclusions | `models/reconciliation.py`, migration `011_reconciliation_exclusions` |
 | Network discovery | `routes/network_discovery.py`, `services/network_discovery.py`, `pages/NetworkDiscoveryPage.svelte` |
 | Network-wide matching | `services/network_wide_reconciliation.py` (read-only host/service evidence) |
+| UniFi enrichment | `services/unifi.py` (official read-only Integration API + cache), `docs/unifi-integration.md` |
 | Network scanner service | `scanner/hlh_scanner/` (target validation, Nmap XML, jobs, HTTP API) |
 | Input/identity adapters | `services/discovery_adapters.py`, `discovery_identity.py`, `network_reconciliation.py` |
 | SPA/navigation | `frontend/src/App.svelte`, `components/Sidebar.svelte` |
@@ -268,6 +271,15 @@ not copy unsafe behaviour:
   It never adds inventory, edits records or changes map layouts. See
   [network-discovery.md](network-discovery.md) for exact execution, configuration,
   API and matching rules.
+- **Optional UniFi enrichment** uses the official local Network Integration API
+  (`X-API-KEY`, `GET /proxy/network/integration/v1/...`: info, sites, adopted
+  devices, connected clients), HTTPS verification with an optional CA file, bounded
+  pagination and a process-local cache. It is refresh-only by explicit admin action,
+  never writes to the controller or inventory, and treats offline/historical or
+  UniFi-only records as separate evidence rather than Nmap presence/absence. See
+  [unifi-integration.md](unifi-integration.md). Live controller verification remains
+  outstanding; the repository tests use mocked UniFi responses and no credentials.
+
 
 The upstream direct-import endpoints still must not be called or trusted: they write
 that process's database without HomeLab-Hub's preview/admin safeguards, and its HTTP
@@ -392,8 +404,8 @@ handover): **106 backend tests, 50 frontend tests, 10 Chromium checks**, product
 frontend build and isolated local API/SPA smoke checks passed. The Docker exporter
 change was validated with **120 backend tests** (14 exporter tests, including real
 `normalise_snapshot` compatibility). Bulk/exclusions added **137 backend tests**, and
-the Phase 5 network-discovery slice brings the totals to **166 backend tests, 22
-scanner tests and 61 frontend unit tests**; the production frontend build and four
+the Phase 5 network-discovery slice brings the totals to **188 backend tests, 22
+scanner tests and 62 frontend unit tests**; the production frontend build and six
 Reconciliation/Network discovery Playwright checks passed. Other browser specs were
 not rerun. Backend validation used Python 3.12; production Dockerfile uses Python
 3.14. Existing warnings: SQLAlchemy identity-map warning in inventory import;
@@ -422,14 +434,15 @@ MapPage chunk >500 kB.
    The six rollback containers can now be excluded as operational policy; decisions
    about the active redesign container and scanner remain explicit and are not
    inferred from names.
-4. **Integrate the existing Nmap scanner.** Delivered as a separate
-   token-authenticated scanner service with approved-target validation, bounded
-   host/TCP discovery, status timestamps and read-only network-wide matching. The
-   matcher now searches the full inventory and separates host/service evidence.
-   Remaining work is persisted scan history, reviewed inventory/map actions, optional
-   HTTP probing with verified TLS, supervised deployment/scheduling and possible
-   UniFi evidence adapters. Do not copy upstream direct imports, OS fingerprinting or
-   TLS bypass.
+4. **Integrate the existing Nmap scanner and UniFi evidence.** Delivered as a
+   separate token-authenticated scanner service with approved-target validation,
+   bounded host/TCP discovery, status timestamps and read-only network-wide matching,
+   plus optional official UniFi Network Integration evidence. The matcher searches
+   the full inventory, separates host/service evidence and keeps UniFi current/
+   historical records distinct from Nmap observations. Remaining work is live UniFi
+   validation, persisted scan history, reviewed inventory/map actions, optional HTTP
+   probing with verified TLS, supervised scheduling and possible UniFi client-history
+   enrichment. Do not copy upstream direct imports, OS fingerprinting or TLS bypass.
 5. **Improve dashboard summaries/filtering.** Delivered for Reconciliation:
    matched/unmatched/excluded/uncertain/not-seen summaries plus category and search
    filters while detailed sections remain available. Remaining work is persisted
@@ -445,6 +458,7 @@ logic.
 
 - [Phase 4 contract and scanner investigation](phase4-reconciliation.md).
 - [Network discovery architecture, configuration and APIs](network-discovery.md).
+- [UniFi read-only enrichment and supervised setup](unifi-integration.md).
 - [Supervised Betty scanner test deployment](scanner-betty-test-deployment.md).
 - [Phase 3 implementation report](container-group-management-phase3.md) — historical.
 - [Phase 3 polish and migration review](container-group-polish-review.md) — historical

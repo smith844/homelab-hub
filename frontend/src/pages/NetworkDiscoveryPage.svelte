@@ -4,13 +4,22 @@
   import { adminHeaders, getAdminToken, setAdminToken } from '../lib/admin.js';
   import { addToast } from '../lib/stores.js';
   import {
+    DEVICE_TYPE_FILTERS,
     HOST_MATCH_FILTERS,
     SERVICE_MATCH_FILTERS,
-    candidateCount,
+    SOURCE_FILTERS,
+    UNIFI_STATE_FILTERS,
+    candidateGroups,
+    deviceIdentityCount,
+    filterCandidates,
     filterHostRows,
     filterServiceRows,
-    primaryCandidate,
+    filterUnifiOnlyRows,
+    networkLabel,
+    networksFromResult,
+    primaryIdentity,
     scanIsTerminal,
+    serviceIdentityCount,
     summarizeNetworkComparison,
   } from '../lib/networkDiscovery.js';
 
@@ -19,6 +28,9 @@
   let scan = null, scanning = false, reconciling = false, pollTimer = null, pollCount = 0;
   let comparison = null, comparisonError = '';
   let hostFilter = 'all', serviceFilter = 'all', query = '';
+  let sourceFilter = 'all', stateFilter = 'all', networkFilter = '', typeFilter = 'all';
+  let unifiStatus = null, unifiError = '', unifiLoading = false;
+  let appQueries = {};
   let tokenSaved = false;
   let savedToken = getAdminToken(), token = savedToken;
   const value = v => v === null || v === undefined || v === '' ? '(not recorded)' : String(v);
@@ -29,15 +41,30 @@
 
   $: activeTarget = customTarget.trim() || approvedTarget;
   $: summary = summarizeNetworkComparison(comparison);
-  $: hostRows = filterHostRows(comparison?.hosts || [], hostFilter, query);
+  $: hostRows = filterHostRows(comparison?.hosts || [], hostFilter, query, {
+    source: sourceFilter, network: networkFilter, state: stateFilter, type: typeFilter,
+  });
   $: serviceRows = filterServiceRows(comparison?.services || [], serviceFilter, query);
+  $: uniFiOnlyRows = (sourceFilter === 'both' || sourceFilter === 'nmap') ? [] :
+    filterUnifiOnlyRows(comparison?.unifi_only || [], query, stateFilter,
+      networkFilter, typeFilter)
+      .filter(row => hostFilter === 'all' || row.classification === hostFilter);
+  $: networks = networksFromResult(comparison);
+  $: unifi = unifiStatus || comparison?.unifi || {};
   $: canStart = Boolean(activeTarget && config?.configured && savedToken && !scanning);
+
 
   onMount(async () => {
     try {
       config = await get('/network-discovery/config');
       approvedTarget = config.approved_ranges?.[0] || '';
       ports = config.default_ports || '';
+      try {
+        const status = await get('/network-discovery/unifi/status');
+        unifiStatus = status.unifi;
+      } catch (e) {
+        unifiError = e.message;
+      }
     } catch (e) { error = e.message; }
     finally { loading = false; }
   });
@@ -86,11 +113,32 @@
     if (!scan) return;
     comparisonError = ''; reconciling = true;
     try {
-      comparison = await post('/network-discovery/reconcile', { scan });
-      hostFilter = 'all'; serviceFilter = 'all'; query = '';
+      comparison = await post('/network-discovery/reconcile', { scan },
+        { headers: adminHeaders() });
+      if (comparison.unifi) unifiStatus = comparison.unifi;
+      hostFilter = 'all'; serviceFilter = 'all'; sourceFilter = 'all';
+      stateFilter = 'all'; networkFilter = ''; typeFilter = 'all'; query = '';
+      appQueries = {};
     } catch (e) {
       comparison = null; comparisonError = e.message;
     } finally { reconciling = false; }
+  }
+
+  async function refreshUnifi() {
+    if (!savedToken) { unifiError = 'Save the admin token before refreshing UniFi.'; return; }
+    unifiLoading = true; unifiError = '';
+    try {
+      const result = await post('/network-discovery/unifi/refresh', {},
+        { headers: adminHeaders() });
+      unifiStatus = result.unifi;
+      if (scanIsTerminal(scan?.status)) await reconcile();
+    } catch (e) {
+      unifiError = e.message;
+      try {
+        const status = await get('/network-discovery/unifi/status');
+        unifiStatus = status.unifi;
+      } catch (statusError) { /* keep the primary refresh error */ }
+    } finally { unifiLoading = false; }
   }
 
   function candidateHref(candidate) {
@@ -104,7 +152,9 @@
 
   function clearScan() {
     stopPolling(); scan = null; comparison = null; comparisonError = ''; error = '';
-    hostFilter = 'all'; serviceFilter = 'all'; query = ''; reconciling = false;
+    hostFilter = 'all'; serviceFilter = 'all'; sourceFilter = 'all';
+    stateFilter = 'all'; networkFilter = ''; typeFilter = 'all'; query = '';
+    appQueries = {}; reconciling = false;
   }
 </script>
 
@@ -121,6 +171,28 @@
       <p>The web app needs <code>HLH_SCANNER_URL</code> and <code>HLH_SCANNER_TOKEN</code>. The scanner runs separately with its own token and approved ranges; no nmap or elevated networking is required in this web container.</p>
     </article>
   {/if}
+
+  <article class="unifi-status">
+    <h2>UniFi integration</h2>
+    {#if unifi.configured}
+      <p>Read-only UniFi Network Integration evidence is cached separately from HomeLab-Hub inventory and Nmap results. Refreshing this cache does not start an Nmap scan.</p>
+      <p>{unifi.has_data ? `Last successful refresh: ${value(unifi.last_success)}` : 'No successful UniFi refresh has completed.'}{#if unifi.stale} · <strong>Stale</strong>{/if}{#if unifi.version} · Network {unifi.version}{/if}</p>
+      <div class="summary unifi-counts">
+        <span class="chip">{value(unifi.infrastructure_devices)} infrastructure devices</span>
+        <span class="chip">{value(unifi.clients)} clients</span>
+        <span class="chip">{value(unifi.current_clients)} current</span>
+        <span class="chip">{value(unifi.historical_clients)} offline / historical</span>
+      </div>
+    {:else}
+      <p>UniFi is not configured. Nmap discovery and matching continue to work normally. Configure <code>HLH_UNIFI_URL</code>, <code>HLH_UNIFI_API_KEY</code> and optionally <code>HLH_UNIFI_SITE</code>/<code>HLH_UNIFI_CA_FILE</code> to add read-only evidence.</p>
+    {/if}
+    {#if unifi.error}<p role="alert">{unifi.error}</p>{/if}
+    {#if unifiError}<p role="alert">{unifiError}</p>{/if}
+    <div class="controls">
+      <button class="secondary outline" on:click={refreshUnifi} disabled={!savedToken || unifiLoading || !unifi.configured}>{unifiLoading ? 'Refreshing UniFi...' : 'Refresh UniFi observations'}</button>
+      {#if !savedToken}<small>Save the admin token below to refresh.</small>{/if}
+    </div>
+  </article>
 
   <article class="scan-request">
     <h2>Scan request</h2>
@@ -193,6 +265,12 @@
             </div>
           </section>
         </div>
+        <div class="summary unifi-counts" aria-label="UniFi matching summary">
+          <span class="chip"><strong>{value(summary.nmap_hosts_with_unifi)}</strong> Nmap hosts with UniFi evidence</span>
+          <span class="chip"><strong>{value(summary.unifi_only)}</strong> UniFi-only devices</span>
+          <span class="chip"><strong>{value(summary.unifi_source_conflicts)}</strong> source conflicts</span>
+          {#if unifi.configured}<span class="chip">{value(unifi.current_clients)} current UniFi clients</span>{/if}
+        </div>
         <div class="controls filters">
           <label>Host match<select bind:value={hostFilter} aria-label="Host match filter">
             {#each HOST_MATCH_FILTERS as item}<option value={item.value}>{item.label}</option>{/each}
@@ -200,31 +278,70 @@
           <label>Service match<select bind:value={serviceFilter} aria-label="Service match filter">
             {#each SERVICE_MATCH_FILTERS as item}<option value={item.value}>{item.label}</option>{/each}
           </select></label>
+          <label>Source<select bind:value={sourceFilter} aria-label="Observation source filter">
+            {#each SOURCE_FILTERS as item}<option value={item.value}>{item.label}</option>{/each}
+          </select></label>
+          <label>UniFi state<select bind:value={stateFilter} aria-label="UniFi state filter">
+            {#each UNIFI_STATE_FILTERS as item}<option value={item.value}>{item.label}</option>{/each}
+          </select></label>
+          <label>Network<select bind:value={networkFilter} aria-label="Network filter">
+            <option value="">All networks</option>
+            {#each networks as item}<option value={item}>{item}</option>{/each}
+          </select></label>
+          <label>Device type<select bind:value={typeFilter} aria-label="Device type filter">
+            {#each DEVICE_TYPE_FILTERS as item}<option value={item.value}>{item.label}</option>{/each}
+          </select></label>
           <label>Search<input bind:value={query} aria-label="Search network matching" placeholder="IP, hostname, inventory name or classification" /></label>
-          <span>{hostRows.length} of {comparison.hosts.length} hosts · {serviceRows.length} of {comparison.services.length} services</span>
+          <span>{hostRows.length} of {comparison.hosts.length} hosts · {serviceRows.length} of {comparison.services.length} services · {uniFiOnlyRows.length} UniFi-only</span>
         </div>
       </article>
 
       <h2>Host matching ({hostRows.length} shown / {comparison.hosts.length})</h2>
       <div class="table-scroll"><table class="matching-table"><thead><tr><th>Host</th><th>Identity evidence</th><th>Match</th><th>Proposed inventory identity</th></tr></thead><tbody>
         {#each hostRows as row}
+          {@const groups = candidateGroups(row)}
+          {@const primary = primaryIdentity(row)}
+          {@const devices = deviceIdentityCount(row)}
+          {@const services = serviceIdentityCount(row)}
           <tr class:uncertain-row={row.classification === 'unverified'}>
-            <td><code>{row.ip}</code>{#if row.hostname}<small class="hostname">{row.hostname}</small>{/if}{#if row.mac || row.vendor}<small>{value(row.mac)} · {value(row.vendor)}</small>{/if}{#if row.os}<small>OS: {row.os}</small>{/if}{#if row.network}<small>{row.network.name}{row.network.vlan_id !== null ? ` · VLAN ${row.network.vlan_id}` : ''}</small>{/if}{#if row.open_ports}<small>{row.open_ports} open port{row.open_ports === 1 ? '' : 's'}</small>{/if}</td>
-            <td>{#if row.evidence.length}{#each row.evidence as item}<span class="chip">{item}</span>{/each}{:else}<span class="muted">No identity evidence</span>{/if}</td>
+            <td><code>{row.ip}</code>{#if row.hostname}<small class="hostname">{row.hostname}</small>{/if}{#if row.mac || row.vendor}<small>{value(row.mac)} · {value(row.vendor)}</small>{/if}{#if row.os}<small>OS: {row.os}</small>{/if}{#if row.network}<small>{networkLabel(row)}</small>{/if}{#if row.open_ports}<small>{row.open_ports} open port{row.open_ports === 1 ? '' : 's'}</small>{/if}</td>
+            <td>{#if row.sources?.includes('unifi')}<span class="chip source-unifi">UniFi</span>{:else}<span class="chip">Nmap</span>{/if}{#each row.evidence as item}<span class="chip">{item}</span>{/each}{#if row.source_conflict}<span class="chip conflict">Source conflict</span>{/if}</td>
             <td><span class="match {row.classification}">{matchLabels[row.classification] || row.classification}</span><small>{row.reason}</small></td>
             <td>
-              {#if row.candidates.length}
-                <details class="candidates">
-                  <summary><strong>{primaryCandidate(row).name}</strong>{#if candidateCount(row) > 1}<span> +{candidateCount(row) - 1} more</span>{/if}</summary>
-                  <ul>{#each row.candidates as candidate}<li><a href={candidateHref(candidate)}>{candidate.name}</a><small>{candidate.category}{#if candidate.parent} · parent {candidate.parent.name}{/if}</small><small>Evidence: {candidate.evidence.join(', ') || 'none recorded'}</small></li>{/each}</ul>
-                  {#if row.service_candidates?.length}
-                    <h4>Applications/services at this address</h4>
-                    <ul>{#each row.service_candidates as candidate}<li><a href={candidateHref(candidate)}>{candidate.name}</a><small>{candidate.category}{candidate.port ? ` · port ${candidate.port}` : ''}</small><small>Evidence: {candidate.evidence.join(', ')}</small></li>{/each}</ul>
+              <details class="candidates">
+                <summary>
+                  <strong>{primary?.name || 'No reliable match'}</strong>
+                  {#if devices > 1}<span>+{devices - 1} device{devices === 2 ? '' : 's'}</span>{/if}
+                  {#if services}<span class="service-count">· {services} application{services === 1 ? '' : 's'} / service{services === 1 ? '' : 's'}</span>{/if}
+                </summary>
+                {#if row.unifi_matches?.length}
+                  <h4>UniFi evidence</h4>
+                  <ul class="unifi-list">
+                    {#each row.unifi_matches as item}
+                      <li><strong>{item.name || item.hostname || item.mac || item.ip}</strong><small>{item.kind} · {item.device_type || 'unknown type'} · {item.online === true ? 'online/current' : item.online === false ? 'offline/historical' : 'state unknown'}{item.last_seen ? ` · last seen ${item.last_seen}` : ''}</small>{#if item.mac}<small>{item.mac}{item.ip ? ` · ${item.ip}` : ''}</small>{/if}{#if item.ips?.length > 1}<small>Addresses: {item.ips.join(', ')}</small>{/if}{#if item.vendor || item.model}<small>{item.vendor || ''}{item.vendor && item.model ? ' · ' : ''}{item.model || ''}</small>{/if}{#if item.uplink_device_id}<small>Uplink device: {item.uplink_device_id}</small>{/if}{#if item.network}<small>{item.network.name || 'Network'}{item.network.vlan_id !== null && item.network.vlan_id !== undefined ? ` · VLAN ${item.network.vlan_id}` : ''}</small>{/if}</li>
+                    {/each}
+                  </ul>
+                {/if}
+                {#if groups.physical.length}
+                  <h4>Physical / network devices</h4>
+                  <ul>{#each groups.physical as candidate}<li><a href={candidateHref(candidate)}>{candidate.name}</a><small>{candidate.category}{candidate.parent ? ` · parent ${candidate.parent.name}` : ''}</small><small>Evidence: {candidate.evidence.join(', ') || 'none recorded'}</small></li>{/each}</ul>
+                {/if}
+                {#if groups.runtimes.length}
+                  <h4>VMs / runtimes</h4>
+                  <ul>{#each groups.runtimes as candidate}<li><a href={candidateHref(candidate)}>{candidate.name}</a><small>{candidate.category}{candidate.parent ? ` · parent ${candidate.parent.name}` : ''}</small><small>Evidence: {candidate.evidence.join(', ') || 'none recorded'}</small></li>{/each}</ul>
+                {/if}
+                {#if groups.services.length}
+                  <h4>Applications / services ({groups.services.length})</h4>
+                  {#if groups.services.length > 8}
+                    <input aria-label={`Filter services for ${row.ip}`} bind:value={appQueries[row.ip]} placeholder="Filter applications/services by name or port" />
                   {/if}
-                </details>
-              {:else}
-                <details class="candidates"><summary>No reliable match</summary><p>No candidate inventory identity was found for this address.</p></details>
-              {/if}
+                  <ul>{#each filterCandidates(groups.services, appQueries[row.ip]) as candidate}<li><a href={candidateHref(candidate)}>{candidate.name}</a><small>{candidate.category}{candidate.port ? ` · port ${candidate.port}` : ''}{candidate.parent ? ` · parent ${candidate.parent.name}` : ''}</small><small>Evidence: {candidate.evidence.join(', ')}</small></li>{/each}</ul>
+                  {#if !filterCandidates(groups.services, appQueries[row.ip]).length}<p>No applications match this filter.</p>{/if}
+                {/if}
+                {#if !groups.physical.length && !groups.runtimes.length && !groups.services.length && !row.unifi_matches?.length}
+                  <p>No candidate inventory identity was found for this address.</p>
+                {/if}
+              </details>
             </td>
           </tr>
         {/each}
@@ -240,13 +357,39 @@
               <td><code>{row.ip}:{row.port}</code>{#if row.hostname}<small class="hostname">{row.hostname}</small>{/if}</td>
               <td>{value(row.service_name)}<small>{value(row.service_version)}</small></td>
               <td><span class="match {row.classification}">{matchLabels[row.classification] || row.classification}</span><small>{row.reason}</small></td>
-              <td>{#if row.candidates.length}<details class="candidates"><summary><strong>{primaryCandidate(row).name}</strong>{#if row.candidates.length > 1}<span> +{row.candidates.length - 1} more</span>{/if}</summary><ul>{#each row.candidates as candidate}<li><a href={candidateHref(candidate)}>{candidate.name}</a><small>{candidate.category}{candidate.parent ? ` · parent ${candidate.parent.name}` : ''}</small><small>Evidence: {candidate.evidence.join(', ')}</small></li>{/each}</ul></details>{:else}<span class="muted">No application endpoint recorded</span>{/if}</td>
+              <td>{#if row.candidates.length}<details class="candidates"><summary><strong>{primaryIdentity(row)?.name}</strong>{#if row.candidates.length > 1}<span> +{row.candidates.length - 1} more</span>{/if}</summary><ul>{#each row.candidates as candidate}<li><a href={candidateHref(candidate)}>{candidate.name}</a><small>{candidate.category}{candidate.parent ? ` · parent ${candidate.parent.name}` : ''}</small><small>Evidence: {candidate.evidence.join(', ')}</small></li>{/each}</ul></details>{:else}<span class="muted">No application endpoint recorded</span>{/if}</td>
             </tr>
           {/each}
           {#if !serviceRows.length}<tr><td colspan="4">No services match this filter or search.</td></tr>{/if}
         </tbody></table></div>
       {:else}
         <p>No TCP services were observed. Run a “Hosts and TCP services” scan to compare application endpoints.</p>
+      {/if}
+
+      {#if comparison.unifi_only.length}
+        <h2>UniFi-only known devices ({uniFiOnlyRows.length} shown / {comparison.unifi_only.length})</h2>
+        <p class="hint">These devices are known to UniFi but were not observed in this Nmap scan. They are not current Nmap discoveries and are never used to infer absence.</p>
+        <div class="table-scroll"><table class="matching-table"><thead><tr><th>UniFi device</th><th>State</th><th>Inventory match</th><th>Evidence</th></tr></thead><tbody>
+          {#each uniFiOnlyRows as row}
+            {@const primary = primaryIdentity(row)}
+            {@const groups = candidateGroups(row)}
+            <tr class:uncertain-row={row.online === false}>
+              <td><strong>{value(row.unifi_matches?.[0]?.name || row.hostname || row.ip)}</strong>{#if row.hostname}<small class="hostname">{row.hostname}</small>{/if}{#if row.unifi_matches?.[0]?.mac}<small>{row.unifi_matches[0].mac}{row.ip ? ` · ${row.ip}` : ''}</small>{/if}{#if row.device_type}<small>{row.device_type}</small>{/if}{#if row.network}<small>{networkLabel(row)}</small>{/if}</td>
+              <td><span class="match {row.online === false ? 'ambiguous' : row.online === true ? 'matched' : 'unverified'}">{row.online === false ? 'Offline / historical' : row.online === true ? 'Online / current' : 'Unknown state'}</span>{#if row.last_seen}<small>Last seen: {row.last_seen}</small>{/if}</td>
+              <td><span class="match {row.classification}">{matchLabels[row.classification] || row.classification}</span><small>{row.reason}</small></td>
+              <td>
+                <details class="candidates">
+                  <summary><strong>{primary?.name || 'No reliable match'}</strong>{#if groups.physical.length + groups.runtimes.length > 1}<span> +{groups.physical.length + groups.runtimes.length - 1} device</span>{/if}{#if groups.services.length}<span class="service-count"> · {groups.services.length} service{groups.services.length === 1 ? '' : 's'}</span>{/if}</summary>
+                  {#if groups.physical.length || groups.runtimes.length || groups.services.length}
+                    <ul>{#each [...groups.physical, ...groups.runtimes, ...groups.services] as candidate}<li><a href={candidateHref(candidate)}>{candidate.name}</a><small>{candidate.category}{candidate.parent ? ` · parent ${candidate.parent.name}` : ''}</small><small>Evidence: {candidate.evidence.join(', ') || 'UniFi source evidence only'}</small></li>{/each}</ul>
+                  {:else}<p>No inventory candidate matches this UniFi record.</p>{/if}
+                  {#if row.unifi_evidence?.length}<small>{row.unifi_evidence.join(' · ')}</small>{/if}
+                </details>
+              </td>
+            </tr>
+          {/each}
+          {#if !uniFiOnlyRows.length}<tr><td colspan="4">No UniFi-only devices match this filter or search.</td></tr>{/if}
+        </tbody></table></div>
       {/if}
     {/if}
   {/if}
@@ -276,7 +419,14 @@
   .controls label { min-width: 13rem; }
   .hint { color: var(--pico-muted-color); }
   .notice { border-left: 3px solid var(--pico-primary); }
+  .unifi-status { margin-top: 1rem; border-left: 3px solid var(--pico-muted-border-color); }
+  .unifi-counts { align-items: center; }
+  .unifi-list { margin: .3rem 0; padding-left: 1rem; }
+  .service-count { font-weight: 400; color: var(--pico-muted-color); }
+  .source-unifi { border-color: var(--pico-primary); color: var(--pico-primary); }
+  .conflict { border-color: #b04a3a; }
   .scan-status, .match-summary { margin-top: 1rem; }
+  .candidates input { margin: .4rem 0; max-width: 22rem; }
   .summary-groups { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 1rem; margin: .8rem 0; }
   .summary { display: flex; flex-wrap: wrap; gap: .4rem; }
   .summary-item { display: inline-flex; align-items: baseline; gap: .25rem; width: auto; margin: 0; padding: .4rem .6rem; font-size: .75rem; border: 1px solid var(--hlh-control-border); background: transparent; color: var(--hlh-control-fg); box-shadow: none; }
