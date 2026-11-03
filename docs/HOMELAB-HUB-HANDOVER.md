@@ -276,8 +276,10 @@ not copy unsafe behaviour:
   devices, connected clients), HTTPS verification with an optional CA file, bounded
   pagination and a process-local cache. It is refresh-only by explicit admin action,
   never writes to the controller or inventory, and treats offline/historical or
-  UniFi-only records as separate evidence rather than Nmap presence/absence. See
-  [unifi-integration.md](unifi-integration.md). Live controller verification remains
+  UniFi-only records as separate evidence rather than Nmap presence/absence. Optional
+  `HLH_UNIFI_CERT_PIN_SHA256` pins the leaf certificate when a self-signed controller
+  certificate cannot be used as a CA; a mismatch never falls back to insecure TLS.
+  See [unifi-integration.md](unifi-integration.md). Live controller verification remains
   outstanding; the repository tests use mocked UniFi responses and no credentials.
 
 
@@ -404,7 +406,7 @@ handover): **106 backend tests, 50 frontend tests, 10 Chromium checks**, product
 frontend build and isolated local API/SPA smoke checks passed. The Docker exporter
 change was validated with **120 backend tests** (14 exporter tests, including real
 `normalise_snapshot` compatibility). Bulk/exclusions added **137 backend tests**, and
-the Phase 5 network-discovery slice brings the totals to **188 backend tests, 22
+the Phase 5 network-discovery slice brings the totals to **194 backend tests, 22
 scanner tests and 62 frontend unit tests**; the production frontend build and six
 Reconciliation/Network discovery Playwright checks passed. Other browser specs were
 not rerun. Backend validation used Python 3.12; production Dockerfile uses Python

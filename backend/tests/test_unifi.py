@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import io
+import hashlib
+import http.client
 import json
+import ssl
 import urllib.error
 import urllib.parse
 
@@ -244,3 +247,104 @@ def test_unconfigured_and_invalid_controller_url_are_rejected(app):
     app.config["UNIFI_API_KEY"] = "key"
     with pytest.raises(unifi.UnifiUnavailable):
         unifi.UnifiClient()
+
+
+def _der_certificate():
+    return b"a synthetic DER certificate for pin tests"
+
+
+class _PeerSocket:
+    def __init__(self, der):
+        self._der = der
+
+    def getpeercert(self, binary_form=False):
+        return self._der if binary_form else {}
+
+
+def test_certificate_pin_normalization_accepts_colons_and_rejects_malformed():
+    expected = hashlib.sha256(_der_certificate()).hexdigest()
+    assert unifi.normalise_certificate_pin(expected) == expected
+    dotted = ":".join(expected[index:index + 2] for index in range(0, 64, 2)).upper()
+    assert unifi.normalise_certificate_pin(dotted) == expected
+    for value in ("abc", "0" * 63, "g" * 64, expected + "00"):
+        with pytest.raises(unifi.UnifiUnavailable, match="64-character"):
+            unifi.normalise_certificate_pin(value)
+    assert unifi.normalise_certificate_pin("") is None
+
+
+def test_certificate_pin_verification_accepts_only_the_expected_certificate():
+    expected = hashlib.sha256(_der_certificate()).hexdigest()
+    unifi._verify_certificate_pin(_PeerSocket(_der_certificate()), expected)
+    with pytest.raises(unifi.UnifiCertificateError, match="did not match"):
+        unifi._verify_certificate_pin(_PeerSocket(b"another certificate"), expected)
+    with pytest.raises(unifi.UnifiCertificateError, match="did not present"):
+        unifi._verify_certificate_pin(_PeerSocket(None), expected)
+
+
+def test_pinned_connection_verifies_certificate_during_connect(monkeypatch):
+    expected = hashlib.sha256(_der_certificate()).hexdigest()
+    connection = unifi._PinnedHTTPSConnection(
+        "unifi.local", cert_pin=expected, context=ssl._create_unverified_context())
+    monkeypatch.setattr(http.client.HTTPSConnection, "connect",
+                        lambda self: setattr(self, "sock", _PeerSocket(_der_certificate())))
+    connection.connect()
+
+    wrong = unifi._PinnedHTTPSConnection(
+        "unifi.local", cert_pin="0" * 64, context=ssl._create_unverified_context())
+    monkeypatch.setattr(http.client.HTTPSConnection, "connect",
+                        lambda self: setattr(self, "sock", _PeerSocket(_der_certificate())))
+    with pytest.raises(unifi.UnifiCertificateError):
+        wrong.connect()
+
+
+def test_pinned_client_uses_pinned_transport_and_never_falls_back(app, monkeypatch):
+    app.config.update(UNIFI_URL="https://unifi.local", UNIFI_API_KEY="key",
+                      UNIFI_CERT_PIN_SHA256=hashlib.sha256(_der_certificate()).hexdigest())
+    calls = []
+
+    class Opener:
+        def open(self, request, timeout=None):
+            calls.append((request.full_url, timeout))
+            return FakeResponse({"ok": True})
+
+    monkeypatch.setattr(urllib.request, "build_opener", lambda handler: Opener())
+    monkeypatch.setattr(urllib.request, "urlopen",
+                        lambda *args, **kwargs: (_ for _ in ()).throw(
+                            AssertionError("unpinned fallback must not run")))
+    client = unifi.UnifiClient()
+    assert client.cert_pin == hashlib.sha256(_der_certificate()).hexdigest()
+    assert client._get("/v1/info") == {"ok": True}
+    assert calls and calls[0][0].startswith("https://unifi.local/proxy/network/integration/v1/info")
+
+
+def test_pin_connection_failure_is_reported_without_fallback(app, monkeypatch):
+    app.config.update(UNIFI_URL="https://unifi.local", UNIFI_API_KEY="key",
+                      UNIFI_CERT_PIN_SHA256=hashlib.sha256(_der_certificate()).hexdigest())
+
+    class FailingOpener:
+        def open(self, request, timeout=None):
+            raise ssl.SSLError("TLS handshake failed")
+
+    monkeypatch.setattr(urllib.request, "build_opener", lambda handler: FailingOpener())
+    monkeypatch.setattr(urllib.request, "urlopen",
+                        lambda *args, **kwargs: (_ for _ in ()).throw(
+                            AssertionError("unpinned fallback must not run")))
+    client = unifi.UnifiClient()
+    with pytest.raises(unifi.UnifiUnavailable, match="TLS verification failed"):
+        client._get("/v1/info")
+
+
+def test_standard_ca_mode_remains_available_without_a_pin(app, monkeypatch):
+    app.config.update(UNIFI_URL="https://unifi.local", UNIFI_API_KEY="key",
+                      UNIFI_CERT_PIN_SHA256="")
+    calls = []
+
+    def fake_urlopen(request, timeout=None, context=None):
+        calls.append((request.full_url, context))
+        return FakeResponse({"ok": True})
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    client = unifi.UnifiClient()
+    assert client.cert_pin is None
+    assert client._get("/v1/info") == {"ok": True}
+    assert calls and isinstance(calls[0][1], ssl.SSLContext)

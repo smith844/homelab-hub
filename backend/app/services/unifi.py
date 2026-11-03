@@ -15,6 +15,10 @@ when a newer controller exposes them; none are invented.
 from __future__ import annotations
 
 import copy
+import functools
+import hashlib
+import hmac
+import http.client
 import ipaddress
 import json
 import re
@@ -48,6 +52,71 @@ class UnifiAuthError(UnifiUnavailable):
 
 class UnifiResponseError(UnifiError):
     """The controller returned malformed or incomplete data."""
+
+
+class UnifiCertificateError(UnifiUnavailable):
+    """The presented TLS certificate does not match the configured SHA-256 pin."""
+
+
+_PIN_RE = re.compile(r"[0-9a-f]{64}\Z")
+
+
+def normalise_certificate_pin(value):
+    """Return a canonical lowercase SHA-256 hex fingerprint, or None if unset."""
+    text = _text(value, 200)
+    if not text:
+        return None
+    text = text.replace(":", "").replace(" ", "").replace("-", "").lower()
+    if not _PIN_RE.fullmatch(text):
+        raise UnifiUnavailable(
+            "HLH_UNIFI_CERT_PIN_SHA256 must be a 64-character hexadecimal SHA-256 fingerprint"
+        )
+    return text
+
+
+def _verify_certificate_pin(sock, expected):
+    """Verify the peer certificate before any HTTP request is written."""
+    try:
+        der = sock.getpeercert(binary_form=True)
+    except (OSError, ValueError) as exc:
+        raise UnifiCertificateError("UniFi server did not present a usable certificate") from exc
+    if not der:
+        raise UnifiCertificateError("UniFi server did not present a usable certificate")
+    actual = hashlib.sha256(der).hexdigest()
+    if not hmac.compare_digest(actual, expected):
+        raise UnifiCertificateError("UniFi server certificate SHA-256 pin did not match")
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """HTTPS connection that checks a certificate fingerprint before sending."""
+
+    def __init__(self, *args, cert_pin=None, **kwargs):
+        self._cert_pin = cert_pin
+        super().__init__(*args, **kwargs)
+
+    def connect(self):
+        super().connect()
+        _verify_certificate_pin(self.sock, self._cert_pin)
+
+
+class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
+    """Use an unverified CA context only as transport to obtain the pinned cert.
+
+    The pin is checked inside the connection before the HTTP request (including
+    the X-API-KEY header) is sent. There is deliberately no fallback path when a
+    pin is configured.
+    """
+
+    def __init__(self, cert_pin):
+        super().__init__(context=ssl._create_unverified_context())
+        self._cert_pin = cert_pin
+
+    def https_open(self, req):
+        return self.do_open(
+            functools.partial(_PinnedHTTPSConnection, cert_pin=self._cert_pin),
+            req,
+            context=self._context,
+        )
 
 
 def _config(name, default=""):
@@ -127,7 +196,7 @@ class UnifiClient:
     """Minimal read-only official UniFi Network Integration client."""
 
     def __init__(self, url=None, api_key=None, site=None, ca_file=None, timeout=10,
-                 max_pages=20, max_observations=5000, opener=None):
+                 max_pages=20, max_observations=5000, cert_pin=None, opener=None):
         self.url = (url if url is not None else _config("UNIFI_URL")).rstrip("/")
         self.api_key = api_key if api_key is not None else _text(_config("UNIFI_API_KEY"), 500)
         self.site_selector = _text(site if site is not None else _config("UNIFI_SITE"), 200)
@@ -135,7 +204,9 @@ class UnifiClient:
         self.timeout = timeout
         self.max_pages = max_pages
         self.max_observations = max_observations
-        self.opener = opener or urllib.request.urlopen
+        configured_pin = cert_pin if cert_pin is not None else _config("UNIFI_CERT_PIN_SHA256", "")
+        self.cert_pin = normalise_certificate_pin(configured_pin)
+        self.opener = opener
         self._base = self._normalise_base(self.url)
         self._context = None
 
@@ -163,6 +234,18 @@ class UnifiClient:
                 raise UnifiUnavailable("The configured UniFi CA file could not be loaded") from exc
         return self._context
 
+    def _open(self, request):
+        if self.opener is not None:
+            # Injected opener used by tests; production paths below never bypass
+            # the configured trust mode.
+            return self.opener(request, timeout=self.timeout, context=self._context_obj())
+        if self.cert_pin:
+            opener = urllib.request.build_opener(_PinnedHTTPSHandler(self.cert_pin))
+            return opener.open(request, timeout=self.timeout)
+        return urllib.request.urlopen(
+            request, timeout=self.timeout, context=self._context_obj()
+        )
+
     def _get(self, path, params=None):
         # Only GET is implemented on purpose: this adapter must never mutate UniFi.
         query = f"?{urllib.parse.urlencode(params)}" if params else ""
@@ -172,7 +255,7 @@ class UnifiClient:
             method="GET",
         )
         try:
-            with self.opener(request, timeout=self.timeout, context=self._context_obj()) as response:
+            with self._open(request) as response:
                 body = response.read(MAX_RESPONSE_BYTES + 1)
         except urllib.error.HTTPError as exc:
             message = ""

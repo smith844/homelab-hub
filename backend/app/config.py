@@ -29,6 +29,7 @@ class Config:
     UNIFI_API_KEY = (os.environ.get("HLH_UNIFI_API_KEY") or "").strip()
     UNIFI_SITE = (os.environ.get("HLH_UNIFI_SITE") or "").strip()
     UNIFI_CA_FILE = (os.environ.get("HLH_UNIFI_CA_FILE") or "").strip() or None
+    UNIFI_CERT_PIN_SHA256 = (os.environ.get("HLH_UNIFI_CERT_PIN_SHA256") or "").strip()
     UNIFI_TIMEOUT = (os.environ.get("HLH_UNIFI_TIMEOUT") or "10").strip()
     UNIFI_MAX_PAGES = (os.environ.get("HLH_UNIFI_MAX_PAGES") or "20").strip()
     UNIFI_MAX_OBSERVATIONS = (os.environ.get("HLH_UNIFI_MAX_OBSERVATIONS") or "5000").strip()

@@ -42,6 +42,43 @@ self-signed controller certificate, point `HLH_UNIFI_CA_FILE` at the trusted CA
 certificate. Do **not** disable verification or copy the old upstream scanner's
 `verify=False` behaviour.
 
+### SHA-256 certificate pinning
+
+Some controller certificates (for example the UCG Max certificate valid for
+`unifi.local`) are self-signed leaves without the Basic Constraints CA extension,
+so Python rejects them as a CA file. In that case configure an explicit certificate
+pin instead:
+
+```sh
+HLH_UNIFI_CERT_PIN_SHA256=AA:BB:...:FF
+```
+
+- The pin is the SHA-256 fingerprint of the server's leaf certificate, 64 hex
+  characters; colons, spaces, dashes and upper/lower case are tolerated.
+- With a pin configured, the adapter establishes TLS only to obtain the peer
+  certificate, verifies the SHA-256 fingerprint **before sending the HTTP request
+  or `X-API-KEY` header**, and then uses that same connection.
+- A mismatched pin, missing certificate or TLS handshake failure is rejected. There
+  is no fallback to an unpinned connection.
+- Pin mode intentionally does not require the controller hostname/SAN to match, so
+  `https://unifi.local` and a Docker hostname mapping resolve to the same trusted
+  controller certificate. The URL still must resolve and use HTTPS.
+- Without a pin, normal CA verification (including hostname checks) is preserved.
+- Do not log the certificate, fingerprint or API key. Pin rotation is required when
+  the controller certificate is renewed.
+
+Obtaining the fingerprint without printing credentials or private key material:
+
+```sh
+openssl s_client -connect unifi.local:443 -servername unifi.local </dev/null 2>/dev/null \
+  | openssl x509 -noout -fingerprint -sha256
+```
+
+The output is `SHA256 Fingerprint=AA:BB:...`; copy that value into the private env
+file. This is a public certificate fingerprint, not an API key. Never paste a
+private key or controller credential into chat.
+
+
 ## Configuration
 
 Add these to the existing private web environment, following the same `600`-mode
@@ -52,6 +89,7 @@ HLH_UNIFI_URL=https://192.168.1.1
 HLH_UNIFI_API_KEY=<view-only API key>
 HLH_UNIFI_SITE=<optional site id/name/internal reference>
 HLH_UNIFI_CA_FILE=/path/to/private-controller-ca.pem
+HLH_UNIFI_CERT_PIN_SHA256=<optional 64-hex certificate SHA-256 fingerprint>
 HLH_UNIFI_TIMEOUT=10
 HLH_UNIFI_MAX_PAGES=20
 HLH_UNIFI_MAX_OBSERVATIONS=5000
@@ -161,7 +199,8 @@ cd frontend && npm test
 UniFi tests inject a mocked opener and never require live credentials. Cover:
 authentication rejection, timeout/unavailable, malformed JSON, pagination,
 multiple IPs, optional network/offline fields, cache preservation on failure,
-Nmap/UniFi conflicts and no inventory mutation.
+Nmap/UniFi conflicts, certificate-pin normalization/verification and no inventory
+mutation.
 
 ## Supervised Betty test steps
 
@@ -178,8 +217,9 @@ Nmap/UniFi conflicts and no inventory mutation.
    does not start an Nmap scan.
 6. Run the normal approved single-host Nmap scan, then inspect host hierarchy,
    UniFi evidence, source conflicts and UniFi-only devices. No inventory is changed.
-7. If TLS verification fails, install the controller CA via `HLH_UNIFI_CA_FILE`;
-   do not disable verification.
+7. If TLS verification fails, either install the controller CA via
+   `HLH_UNIFI_CA_FILE` or use the explicitly reviewed certificate fingerprint in
+   `HLH_UNIFI_CERT_PIN_SHA256`; do not disable verification.
 
 Live controller validation is still outstanding until these steps are executed with
 operator approval. No controller credentials are present in this repository.
