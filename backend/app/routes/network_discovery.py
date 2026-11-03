@@ -5,6 +5,7 @@ from ..services.admin_auth import admin_required
 from ..services.network_discovery import (
     NetworkDiscoveryBusy,
     NetworkDiscoveryError,
+    NetworkDiscoveryNotFound,
     NetworkDiscoveryUnavailable,
     config_payload,
     scan_status,
@@ -53,6 +54,8 @@ def create_scan():
 def get_scan(scan_id):
     try:
         return jsonify(scan=scan_status(scan_id))
+    except NetworkDiscoveryNotFound as exc:
+        return jsonify(error=str(exc)), 404
     except NetworkDiscoveryUnavailable as exc:
         return jsonify(error=str(exc)), 503
     except NetworkDiscoveryError as exc:

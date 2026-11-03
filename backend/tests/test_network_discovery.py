@@ -1,4 +1,7 @@
 """Web bridge, validation and reconciliation integration for network discovery."""
+import io
+import urllib.error
+
 import pytest
 
 from app.models import AppService, Hardware, VM, db
@@ -162,6 +165,33 @@ def test_scan_status_proxy_validates_ids_and_sanitises_scanner_output(inventory,
 
     monkeypatch.setattr(network_discovery, "_request", malformed)
     assert client.get(f"/api/network-discovery/scan/{SCAN_ID}").status_code == 400
+
+
+def test_expired_scanner_job_is_reported_as_404(inventory, client, monkeypatch):
+    def expired(method, path, payload=None):
+        raise network_discovery.NetworkDiscoveryNotFound("Scan not found or expired")
+
+    monkeypatch.setattr(network_discovery, "_request", expired)
+    response = client.get(f"/api/network-discovery/scan/{SCAN_ID}")
+    assert response.status_code == 404
+    assert "expired" in response.get_json()["error"]
+
+
+def test_scanner_404_is_expiry_only_for_status_reads(inventory, app, monkeypatch):
+    def missing(*args, **kwargs):
+        raise urllib.error.HTTPError(
+            "http://127.0.0.1:8791/api/scanner/scan", 404, "Not Found", {},
+            io.BytesIO(b""))
+
+    monkeypatch.setattr(network_discovery.urllib.request, "urlopen", missing)
+    with app.app_context():
+        with pytest.raises(network_discovery.NetworkDiscoveryNotFound):
+            network_discovery.scan_status(SCAN_ID)
+        with pytest.raises(network_discovery.NetworkDiscoveryError) as error:
+            network_discovery.start_scan("192.168.1.20", "discover")
+        assert not isinstance(error.value, network_discovery.NetworkDiscoveryNotFound)
+        assert "404" in str(error.value)
+
 
 
 def test_network_scan_results_compare_with_inventory_without_mutation(inventory, client):

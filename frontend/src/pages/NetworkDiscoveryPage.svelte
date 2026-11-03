@@ -4,6 +4,12 @@
   import { adminHeaders, getAdminToken, setAdminToken } from '../lib/admin.js';
   import { addToast } from '../lib/stores.js';
   import {
+    clearScanState,
+    isScanActive,
+    loadScanState,
+    saveScanState,
+  } from '../lib/networkScan.js';
+  import {
     DEVICE_TYPE_FILTERS,
     HOST_MATCH_FILTERS,
     SERVICE_MATCH_FILTERS,
@@ -26,6 +32,7 @@
   let config = null, loading = true, error = '';
   let approvedTarget = '', customTarget = '', scanType = 'discover', ports = '';
   let scan = null, scanning = false, reconciling = false, pollTimer = null, pollCount = 0;
+  let restoring = false, scanNotice = '', scanExpired = false, retryBusy = false;
   let comparison = null, comparisonError = '';
   let hostFilter = 'all', serviceFilter = 'all', query = '';
   let sourceFilter = 'all', stateFilter = 'all', networkFilter = '', typeFilter = 'all';
@@ -51,7 +58,9 @@
       .filter(row => hostFilter === 'all' || row.classification === hostFilter);
   $: networks = networksFromResult(comparison);
   $: unifi = unifiStatus || comparison?.unifi || {};
-  $: canStart = Boolean(activeTarget && config?.configured && savedToken && !scanning);
+  $: scanActive = isScanActive(scan);
+  $: canStart = Boolean(activeTarget && config?.configured && savedToken &&
+    !scanning && !restoring && !scanActive);
 
 
   onMount(async () => {
@@ -67,6 +76,7 @@
       }
     } catch (e) { error = e.message; }
     finally { loading = false; }
+    await restorePersistedScan();
   });
 
   onDestroy(() => stopPolling());
@@ -76,10 +86,71 @@
     pollTimer = null;
   }
 
+  function startPolling(scanId) {
+    stopPolling();
+    pollCount = 0;
+    pollTimer = setInterval(() => pollScan(scanId), 1500);
+  }
+
+  async function restorePersistedScan() {
+    const stored = loadScanState();
+    if (!stored) return;
+    scan = stored;
+    await fetchScanStatus(stored.scan_id, stored);
+  }
+
+  function handleExpiredScan(cached = null) {
+    scanExpired = true;
+    clearScanState();
+    if (cached && scanIsTerminal(cached.status)) {
+      scan = cached;
+      scanNotice = 'The scanner no longer retains this job; showing the last cached result from this browser session.';
+    } else {
+      scan = null;
+      scanNotice = 'The running scan is no longer retained by the scanner, so it cannot be resumed. No partial results are available; start a new scan when ready.';
+    }
+  }
+
+  async function fetchScanStatus(scanId, cached = null) {
+    restoring = true; error = ''; scanNotice = '';
+    try {
+      const result = await get(`/network-discovery/scan/${scanId}`);
+      scan = result.scan;
+      saveScanState(scan);
+      scanExpired = false;
+      if (scanIsTerminal(scan.status)) { stopPolling(); await reconcile(); }
+      else { startPolling(scan.scan_id); }
+    } catch (e) {
+      stopPolling();
+      if (e.status === 404) {
+        handleExpiredScan(cached);
+        if (scan && scanIsTerminal(scan.status)) await reconcile();
+      } else {
+        scan = cached || scan;
+        scanNotice = 'Could not refresh the saved scan status; the scanner may be unavailable. No new scan was started.';
+        error = e.message;
+      }
+    } finally {
+      restoring = false;
+    }
+  }
+
+  async function retryScanStatus() {
+    if (retryBusy) return;
+    retryBusy = true;
+    try {
+      if (scan?.scan_id) await fetchScanStatus(scan.scan_id, scan);
+      else await restorePersistedScan();
+    } finally { retryBusy = false; }
+  }
+
   async function startScan() {
     if (!savedToken) { error = 'Save the admin token before starting a scan.'; return; }
     if (!activeTarget) { error = 'Choose or enter an approved target.'; return; }
-    stopPolling(); error = ''; comparison = null; comparisonError = '';
+    if (scanActive) { error = 'A scan is already running; wait for it to finish before starting another.'; return; }
+    stopPolling(); error = ''; scanNotice = ''; scanExpired = false;
+    comparison = null; comparisonError = '';
+    clearScanState();
     scanning = true; scan = null; pollCount = 0;
     try {
       const result = await post('/network-discovery/scan', {
@@ -88,8 +159,9 @@
         ports: scanType === 'services' ? ports : null,
       }, { headers: adminHeaders() });
       scan = result.scan;
+      saveScanState(scan);
       if (scanIsTerminal(scan.status)) { await reconcile(); }
-      else { pollTimer = setInterval(() => pollScan(scan.scan_id), 1500); }
+      else { startPolling(scan.scan_id); }
     } catch (e) { error = e.message; }
     finally { scanning = false; }
   }
@@ -103,9 +175,16 @@
     try {
       const result = await get(`/network-discovery/scan/${scanId}`);
       scan = result.scan;
+      saveScanState(scan);
       if (scanIsTerminal(scan.status)) { stopPolling(); await reconcile(); }
     } catch (e) {
-      stopPolling(); error = e.message;
+      stopPolling();
+      if (e.status === 404) {
+        handleExpiredScan(scanIsTerminal(scan) ? scan : null);
+      } else {
+        scanNotice = 'Could not refresh the running scan status; the scanner may be unavailable. No new scan was started.';
+        error = e.message;
+      }
     }
   }
 
@@ -151,7 +230,8 @@
   }
 
   function clearScan() {
-    stopPolling(); scan = null; comparison = null; comparisonError = ''; error = '';
+    stopPolling(); clearScanState(); scan = null; comparison = null; comparisonError = ''; error = '';
+    scanNotice = ''; scanExpired = false;
     hostFilter = 'all'; serviceFilter = 'all'; sourceFilter = 'all';
     stateFilter = 'all'; networkFilter = ''; typeFilter = 'all'; query = '';
     appQueries = {}; reconciling = false;
@@ -216,17 +296,37 @@
     </div>
     {#if !savedToken}<small>Save the admin token below before starting a scan.</small>{/if}
     {#if !config?.approved_ranges?.length}<small>No approved ranges are configured; scans are disabled.</small>{/if}
+    {#if scanActive}<small>A scan is already running; duplicate submissions are disabled until it finishes.</small>{/if}
   </article>
 
+  {#if scanNotice && !scan}
+    <article class="notice" role="alert">
+      <h2>Saved scan unavailable</h2>
+      <p>{scanNotice}</p>
+    </article>
+  {/if}
+
   {#if scan}
-    <article class="scan-status">
-      <h2>Scan status: {scan.status}</h2>
+    <article class="scan-status" class:running={scanActive}>
+      <h2>Scan status: <span class="status-pill {scan.status}">{scan.status}</span></h2>
+      {#if restoring}<p aria-busy="true">Restoring saved scan status…</p>{/if}
+      {#if scanActive}
+        <p class="running-label">Scan in progress · target <code>{value(scan.target)}</code> · completion {value(scan.progress)}%</p>
+        <progress value={Number.isFinite(Number(scan.progress)) ? Number(scan.progress) : 0} max="100" aria-label="Scan progress"></progress>
+      {/if}
       <p><strong>{scan.type === 'portscan' ? 'Hosts and TCP services' : 'Host discovery'}</strong> · target <code>{value(scan.target)}</code></p>
       <p>Started: {value(scan.started_at)} · Completed: {value(scan.completed_at)} · Progress: {value(scan.progress)}%</p>
       <p>{value(scan.hosts_up)} hosts up · {value(scan.hosts?.length)} reported hosts · {value(scan.results?.length)} open services · {value(scan.hosts_down)} hosts down</p>
+      {#if scan.scan_id}<p><small>Scan ID: <code>{scan.scan_id}</code></small></p>{/if}
       {#if scan.status === 'partial'}<p role="alert">Partial scan. Results are retained for review, but completion, coverage and device absence cannot be asserted.</p>{/if}
       {#if scan.status === 'failed'}<p role="alert">The scan failed. No device or service is confirmed absent.</p>{/if}
       {#if scan.error}<p role="alert">{scan.error}</p>{/if}
+      {#if scanNotice}<p role="alert">{scanNotice}</p>{/if}
+      {#if scanExpired}<p class="hint">The cached result is shown for review only; the scanner no longer reports this job as current.</p>{/if}
+      {#if scan.cached_truncated && !scanExpired}<p class="hint">Detailed hosts and services were not cached in this browser session; they are reloaded from the scanner when available.</p>{/if}
+      {#if scanNotice && !scanExpired}
+        <button class="secondary outline" on:click={retryScanStatus} disabled={retryBusy || restoring}>Retry saved scan status</button>
+      {/if}
       {#if scan.warnings?.length}
         <details><summary>{scan.warnings.length} scan warning{scan.warnings.length === 1 ? '' : 's'}</summary>
           <ul>{#each scan.warnings as warning}<li>{warning}</li>{/each}</ul>
@@ -425,7 +525,13 @@
   .service-count { font-weight: 400; color: var(--pico-muted-color); }
   .source-unifi { border-color: var(--pico-primary); color: var(--pico-primary); }
   .conflict { border-color: #b04a3a; }
-  .scan-status, .match-summary { margin-top: 1rem; }
+  .scan-status { margin-top: 1rem; }
+  .match-summary { margin-top: 1rem; }
+  .scan-status.running { border-color: var(--pico-primary); border-left-width: 4px; }
+  .running-label { font-weight: 600; }
+  .status-pill { border-radius: 999px; padding: .1rem .45rem; font-size: .8rem; border: 1px solid var(--pico-muted-border-color); }
+  .status-pill.running { border-color: var(--pico-primary); color: var(--pico-primary); }
+  .scan-status progress { width: 100%; margin: .4rem 0 1rem; }
   .candidates input { margin: .4rem 0; max-width: 22rem; }
   .summary-groups { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 1rem; margin: .8rem 0; }
   .summary { display: flex; flex-wrap: wrap; gap: .4rem; }

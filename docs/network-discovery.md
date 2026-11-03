@@ -25,6 +25,10 @@ Flask web app  ──HTTP + X-Scanner-Token──►  scanner service (this repo
   start/status/health endpoints.
 - Scanner jobs live in memory with a bounded TTL. No inventory or map is changed.
   Comparison reuses the Phase 4 network adapter and is displayed next to the scan.
+- The page remembers the current scan in per-tab `sessionStorage`
+  (`hlh.networkScan`) so SPA navigation and a browser refresh do not lose the scan
+  identity. On return it re-reads the authoritative status from the scanner. It never
+  starts a scan automatically and never raises scanner concurrency.
 - The scanner cannot add, edit or delete HomeLab-Hub records.
 
 ## Reused upstream scanner components
@@ -194,7 +198,10 @@ Web bridge:
   whether URL/token are configured. No secrets.
 - `POST /api/network-discovery/scan` — admin token required; validates target,
   starts the scanner, returns `202 {scan}`.
-- `GET /api/network-discovery/scan/<uuid>` — read-only status proxy.
+- `GET /api/network-discovery/scan/<uuid>` — read-only status proxy. `404` means the
+  scanner no longer retains the job (expired or restarted); `503` means the scanner is
+  unreachable. The two cases are deliberately distinct so the UI does not treat an
+  outage as proof that a scan finished or expired.
 - `POST /api/network-discovery/reconcile` — admin-token required; read-only,
   network-wide matching of a scan status against the full inventory plus any cached
   UniFi observations. It never starts a scan or writes inventory.
@@ -267,6 +274,20 @@ changes Docker reconciliation.
 - Results are in memory and expire after the retention period or scanner restart.
   Completion and start timestamps are exposed to the UI; there is no persisted scan
   history yet.
+- The browser session survives navigation and refresh: the page stores the sanitized
+  scan object in `sessionStorage`, restores the running job, and resumes status polling.
+  A completed result is re-fetched from the scanner while it is retained and re-posted
+  to the read-only matcher for review. If storage quota rejects the full scan, only
+  metadata is cached and the page refetches details from the scanner.
+- While a scan is active, duplicate submissions are disabled and a compact
+  “Scan running” link with the target appears in the sidebar. The link is driven by
+  the same session state and does not add another poller.
+- An expired job (`404`) clears the saved running state and shows an explicit notice;
+  it is not restarted. A temporary scanner outage keeps the saved scan and offers a
+  manual retry, so an unreachable scanner is never treated as a completed or expired
+  scan.
+- A cached completed result remains visible for review with an explicit notice if the
+  scanner later reports `404`; it is display-only and never re-enabled as a live job.
 - The Reconciliation adapter treats every network observation as host/service
   evidence. It never maps a port to a Docker container and never writes inventory.
 
@@ -310,17 +331,22 @@ python -m pytest -q backend/tests/test_network_discovery.py
 python -m pytest -q backend/tests/test_network_wide_reconciliation.py
 python -m pytest -q backend/tests/test_unifi.py
 cd frontend && npm test
+cd frontend && npx playwright test tests/browser/network-scan-persistence.spec.js
 ```
 
 Scanner tests mock the Nmap command runner and XML outputs, so no live nmap or
 network access is required. Backend tests mock the scanner HTTP bridge and validate
-target rejection, authentication, partial results and reconciliation integration.
+target rejection, authentication, partial results, scanner `404`/`503` distinction
+and reconciliation integration. Browser tests cover navigation/refresh restoration, the
+global running indicator, duplicate-submission suppression, completed-result
+restoration, expired-job handling and explicit retry without submitting a new scan.
 
 ## Future work
 
 - Future UniFi client/DHCP/device evidence can feed the same normalized observation
   layer without changing inventory matching rules. UniFi is not assumed authoritative.
-- Persisted scan history/freshness tracking.
+- Persisted scan history/freshness tracking on the server (the per-tab browser cache
+  is continuity, not a history store).
 - Reviewable inventory additions/map placement from network results.
 - Optional HTTP probing with verified TLS (never copy the upstream
   `verify=False` behaviour).

@@ -29,6 +29,10 @@ class NetworkDiscoveryError(ValueError):
     """Invalid discovery request or scanner response."""
 
 
+class NetworkDiscoveryNotFound(NetworkDiscoveryError):
+    """The scanner no longer retains the requested scan job."""
+
+
 class NetworkDiscoveryUnavailable(RuntimeError):
     """The scanner service is missing, unreachable or misconfigured."""
 
@@ -197,6 +201,8 @@ def _request(method, path, payload=None):
             raise NetworkDiscoveryUnavailable(
                 "The scanner rejected HomeLab-Hub's configured token"
             ) from exc
+        if exc.code == 404 and method == "GET":
+            raise NetworkDiscoveryNotFound(message or "Scan not found or expired") from exc
         if exc.code in (400, 404, 413):
             raise NetworkDiscoveryError(message or f"Scanner rejected the request (HTTP {exc.code})") from exc
         raise NetworkDiscoveryUnavailable(

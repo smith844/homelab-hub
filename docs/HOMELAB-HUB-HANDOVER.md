@@ -55,7 +55,7 @@ observations with inventory and offers reviewed container changes.
 | Group backups | `services/group_backup.py`, `routes/inventory.py` |
 | Reconciliation | `routes/reconciliation.py`, `services/reconciliation.py` |
 | Reconciliation exclusions | `models/reconciliation.py`, migration `011_reconciliation_exclusions` |
-| Network discovery | `routes/network_discovery.py`, `services/network_discovery.py`, `pages/NetworkDiscoveryPage.svelte` |
+| Network discovery | `routes/network_discovery.py`, `services/network_discovery.py`, `pages/NetworkDiscoveryPage.svelte`, `lib/networkScan.js` |
 | Network-wide matching | `services/network_wide_reconciliation.py` (read-only host/service evidence) |
 | UniFi enrichment | `services/unifi.py` (official read-only Integration API + cache), `docs/unifi-integration.md` |
 | Network scanner service | `scanner/hlh_scanner/` (target validation, Nmap XML, jobs, HTTP API) |
@@ -263,6 +263,14 @@ not copy unsafe behaviour:
   visible for review but never imply device absence. The existing network adapter
   classifies observations as matched/unmatched/duplicate/unverified only; network
   ports are not Docker identities.
+- The active scan is stored per browser tab in `sessionStorage` and restored after SPA
+  navigation or refresh by re-reading scanner status; polling resumes without a new
+  scan submission. Duplicate starts are disabled while active and a compact sidebar
+  indicator shows the running target. Scanner `404` (job expired/restarted) clears the
+  running state with an explicit notice, while `503`/TLS failures keep the saved scan
+  and offer manual retry. Completed results are re-fetched and re-matched for review
+  while the scanner retains them. No scan is ever restarted automatically and scanner
+  concurrency is unchanged.
 - The Network discovery page uses a dedicated read-only **network-wide matcher**
   (`services/network_wide_reconciliation.py`) across hardware, VMs, other devices,
   application endpoints and network memberships. It separates host-level device
@@ -406,12 +414,14 @@ handover): **106 backend tests, 50 frontend tests, 10 Chromium checks**, product
 frontend build and isolated local API/SPA smoke checks passed. The Docker exporter
 change was validated with **120 backend tests** (14 exporter tests, including real
 `normalise_snapshot` compatibility). Bulk/exclusions added **137 backend tests**, and
-the Phase 5 network-discovery slice brings the totals to **194 backend tests, 22
-scanner tests and 62 frontend unit tests**; the production frontend build and six
-Reconciliation/Network discovery Playwright checks passed. Other browser specs were
-not rerun. Backend validation used Python 3.12; production Dockerfile uses Python
-3.14. Existing warnings: SQLAlchemy identity-map warning in inventory import;
-MapPage chunk >500 kB.
+the Phase 5 network-discovery slice, including persistent scan tracking, brings the
+totals to **196 backend tests, 22 scanner tests and 66 frontend unit tests**; the
+production frontend build and all **7 Network discovery/persistence Playwright
+checks** passed. A full browser run passed **16 of 18** checks: the two remaining
+FolderView SVG snapshot checks have no `-win32` baselines in this checkout, so they
+cannot be compared on this Windows host and are unrelated to discovery. Backend
+validation used Python 3.12; production Dockerfile uses Python 3.14. Existing
+warnings: SQLAlchemy identity-map warning in inventory import; MapPage chunk >500 kB.
 
 ## Next development priorities
 
