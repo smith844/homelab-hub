@@ -108,6 +108,7 @@ run_args=(
     --volume "$DATA_DIR:/data"
     --mount "type=bind,source=$FOLDERVIEW,target=/config/folderview-docker.json,readonly"
     --network "$NETWORK"
+    --add-host "unifi.local:192.168.1.1"
     --env-file "$CONFIG_DIR/phase3.env"
     --env "HLH_SCANNER_URL=$SCANNER_URL"
     --env DATABASE_URL=sqlite:////data/homelab-hub.db
@@ -150,3 +151,4 @@ printf '\nSUCCESS: %s at http://192.168.1.80:%s/\n' "$SHA" "$PORT"
 printf 'Backup: %s/%s\n' "$DATA_DIR" "$(basename "$BACKUP")"
 printf 'Previous stopped container: %s\n' "$PREVIOUS"
 printf 'Image: %s\n' "$IMAGE"
+
