@@ -1,5 +1,6 @@
 <script>
-  import { onMount } from "svelte";
+  import DocumentBody from "./DocumentBody.svelte";
+  import { renderDocumentMarkdown } from "../../lib/documentMarkdown.js";
 
   export let content = "";
   export let onChange = () => {};
@@ -10,18 +11,21 @@
   let mode = "split"; // "edit", "preview", "split"
   let editorType = "markdown"; // "markdown", "richtext"
   let localContent = content;
+  let lastRichHtml = '';
 
   // Only update when content changes from outside (document switch)
   $: if (content !== localContent) {
     localContent = content;
     if (richTextEl && editorType === "richtext" && document.activeElement !== richTextEl) {
       richTextEl.innerHTML = renderMarkdown(localContent);
+      lastRichHtml = richTextEl.innerHTML;
     }
   }
 
   // Initialize richtext editor when it becomes available
   $: if (richTextEl && editorType === "richtext" && !richTextEl.innerHTML) {
     richTextEl.innerHTML = renderMarkdown(localContent);
+    lastRichHtml = richTextEl.innerHTML;
   }
 
   function handleInput(e) {
@@ -60,7 +64,7 @@
       // Lists - ordered
       .replace(/<ol[^>]*>(.*?)<\/ol>/gis, (match, list) => {
         let counter = 1;
-        return list.replace(/<li[^>]*>(.*?)<\/li>/gi, () => `${counter++}. $1\n`);
+        return list.replace(/<li[^>]*>(.*?)<\/li>/gi, (_, item) => `${counter++}. ${item}\n`);
       })
       // Code blocks
       .replace(/<pre[^>]*><code[^>]*>(.*?)<\/code><\/pre>/gis, '```\n$1\n```\n')
@@ -80,7 +84,8 @@
   }
 
   function handleRichTextInput() {
-    if (richTextEl) {
+    if (richTextEl && richTextEl.innerHTML !== lastRichHtml) {
+      lastRichHtml = richTextEl.innerHTML;
       localContent = htmlToMarkdown(richTextEl.innerHTML);
       onChange(localContent);
     }
@@ -98,36 +103,7 @@
     }
   }
 
-  // Simple markdown-to-HTML renderer for preview
-  function renderMarkdown(md) {
-    if (!md) return "<p></p>";
-    let html = md
-      // Code blocks
-      .replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code class="language-$1">$2</code></pre>')
-      // Inline code
-      .replace(/`([^`]+)`/g, "<code>$1</code>")
-      // Headers
-      .replace(/^#### (.+)$/gm, "<h4>$1</h4>")
-      .replace(/^### (.+)$/gm, "<h3>$1</h3>")
-      .replace(/^## (.+)$/gm, "<h2>$1</h2>")
-      .replace(/^# (.+)$/gm, "<h1>$1</h1>")
-      // Bold & italic
-      .replace(/\*\*\*(.+?)\*\*\*/g, "<strong><em>$1</em></strong>")
-      .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
-      .replace(/\*(.+?)\*/g, "<em>$1</em>")
-      // Links
-      .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>')
-      // Unordered lists
-      .replace(/^[-*] (.+)$/gm, "<li>$1</li>")
-      // Blockquotes
-      .replace(/^> (.+)$/gm, "<blockquote>$1</blockquote>")
-      // Horizontal rules
-      .replace(/^---$/gm, "<hr>")
-      // Line breaks / paragraphs
-      .replace(/\n\n/g, "</p><p>")
-      .replace(/\n/g, "<br>");
-    return `<p>${html}</p>`;
-  }
+  const renderMarkdown = renderDocumentMarkdown;
 </script>
 
 <div class="editor-container">
@@ -150,6 +126,7 @@
     <div class="editor-panels" class:split={mode === "split"}>
       {#if mode !== "preview"}
         <textarea
+          aria-label="Document Markdown"
           class="editor-textarea"
           bind:this={editorEl}
           value={localContent}
@@ -160,7 +137,7 @@
       {/if}
       {#if mode !== "edit"}
         <div class="editor-preview" bind:this={previewEl}>
-          {@html renderMarkdown(localContent)}
+          <DocumentBody content={localContent} />
         </div>
       {/if}
     </div>
@@ -220,6 +197,7 @@
     flex-direction: column;
     flex: 1;
     overflow: hidden;
+    min-height: 400px;
   }
   .editor-type-selector {
     display: flex;
@@ -234,7 +212,7 @@
     margin: 0;
     background: var(--pico-secondary-background, #2e2e3e);
     border: 1px solid var(--pico-muted-border-color, #333);
-    color: #ffffff;
+    color: var(--pico-color);
     cursor: pointer;
     border-radius: 4px;
   }
@@ -255,7 +233,7 @@
     margin: 0;
     background: none;
     border: 1px solid var(--pico-muted-border-color, #333);
-    color: #ffffff;
+    color: var(--pico-color);
     cursor: pointer;
   }
   .editor-toolbar button.active {
@@ -272,6 +250,7 @@
   }
   .editor-textarea {
     flex: 1;
+    min-width: 0;
     resize: none;
     border: none;
     border-radius: 0;
@@ -283,6 +262,7 @@
   }
   .editor-preview {
     flex: 1;
+    min-width: 0;
     padding: 1rem;
     overflow-y: auto;
     border-left: 1px solid var(--pico-muted-border-color, #333);
@@ -310,7 +290,7 @@
     margin: 0;
     background: var(--pico-secondary-background, #2e2e3e);
     border: 1px solid var(--pico-muted-border-color, #333);
-    color: #ffffff;
+    color: var(--pico-color);
     cursor: pointer;
     border-radius: 3px;
     min-width: 2rem;
@@ -336,14 +316,14 @@
     direction: ltr;
     unicode-bidi: embed;
     text-align: left;
-    color: #ffffff;
+    color: var(--pico-color);
   }
   .richtext-editor :global(h1),
   .richtext-editor :global(h2),
   .richtext-editor :global(h3),
   .richtext-editor :global(p),
   .richtext-editor :global(li) {
-    color: #ffffff;
+    color: var(--pico-color);
   }
   .richtext-editor :global(h1) {
     font-size: 2rem;
@@ -375,3 +355,4 @@
     text-decoration: underline;
   }
 </style>
+

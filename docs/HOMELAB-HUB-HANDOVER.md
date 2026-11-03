@@ -16,6 +16,37 @@ configuration **locations and variable names**, not credential values.
 
 ## Current application and architecture
 
+### Documents reading-first refresh (3 November 2026)
+
+The Documents UI now opens existing notes in a clean reading view with an explicit
+Edit document action. New notes open for editing. The list defaults to 340px, wraps
+full titles, offers title search, and supports pointer/keyboard resizing (260–560px)
+remembered in `hlh.docsListWidth`. On narrow screens it stacks above the reader.
+Deletion lives behind Document actions and still requires confirmation.
+
+The reading view and Markdown editor preview share `DocumentBody.svelte` and the
+existing ByteMD/GFM sanitising pipeline (`lib/documentMarkdown.js`), supporting
+tables, lists and fenced code. Markdown and Rich Text editing remain available;
+opening/closing Rich Text without edits does not rewrite stored Markdown. The
+legacy Rich Text HTML-to-Markdown converter is still limited; use Markdown for
+complex tables/code rather than assuming lossless rich-text round trips.
+
+`lib/documentSaves.js` queues captured drafts by document ID and serialises writes
+per document. `lib/documentSession.js` retains drafts for the current SPA session,
+including failed saves across page navigation. Saves flush on document/page changes;
+status and retry actions expose failures. Leaving/reloading the browser with pending
+edits triggers a warning; drafts are not persisted across reloads or tabs.
+Late document fetches cannot replace a newer selection. Document IDs, content
+storage, parent/order fields, API routes and deployment safeguards are unchanged.
+No migration or live inventory/document edit is required by this UI change.
+
+Validation for this refresh: 78 frontend unit tests, nine Documents Chromium checks,
+two sidebar regression checks, production frontend build, and visual inspection of
+light/dark screenshots using synthetic local API fixtures. No backend tests or Betty
+deployment were performed for this frontend-only change. ByteMD's dependency source
+emits accessibility warnings during compilation; the existing MapPage chunk-size
+warning remains. These checks do not establish live deployment validation.
+
 HomeLab-Hub is a Flask application serving a compiled Svelte SPA with SQLite.
 It records hardware, VMs/runtimes, applications, storage/shares, networks, other
 devices and documents. The Graph, Grouped and Tree presentations share inventory.
@@ -491,3 +522,4 @@ logic.
 
 Older reports contain point-in-time test counts, branch states and cloud setup
 instructions. They do not override this handover, `AGENTS.md` or current owner approvals.
+
