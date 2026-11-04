@@ -10,3 +10,6 @@ button, [role="button"], input[type="submit"], input[type="button"], input[type=
 }
 html[data-theme="light"] { --pico-contrast: #25384a; }
 html[data-theme="dark"] { --pico-contrast: #e3ecf4; }
+
+/* Outrank Pico's :root breakpoint rules at every viewport width. */
+html:root { --pico-font-size: 17px; }
